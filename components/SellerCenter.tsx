@@ -30,6 +30,7 @@ import {
   Award,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
+import { INITIAL_SELLERS } from '@/lib/seed-catalog';
 import SellerCatalogAndInventory from '@/components/seller/SellerCatalogAndInventory';
 import SellerOrdersAndReturns from '@/components/seller/SellerOrdersAndReturns';
 import SellerMarketingAndEngagement from '@/components/seller/SellerMarketingAndEngagement';
@@ -92,7 +93,12 @@ export default function SellerCenter() {
   }, [isDemoMode, currentUser, demoSelectedSellerId]);
 
   const activeSeller = useMemo(() => {
-    return sellers.find((s) => s.id === effectiveSellerId) || sellers[1] || sellers[0];
+    return (
+      sellers.find((s) => s.id === effectiveSellerId) ||
+      sellers[1] ||
+      sellers[0] ||
+      INITIAL_SELLERS[1]
+    );
   }, [sellers, effectiveSellerId]);
 
   // Strictly scoped Seller Data

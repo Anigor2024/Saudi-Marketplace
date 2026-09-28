@@ -644,7 +644,17 @@ service cloud.firestore {
 
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
-      allow update: if isValidId(ticketId) && isAdmin();
+      // Production clients (including browser Admin UI) may only transition treasuryStatus
+      // among ['requested', 'under_review', 'approved_for_treasury', 'rejected'].
+      // Setting 'completed' requires a trusted backend / banking integration using Admin SDK.
+      allow update: if isValidId(ticketId)
+        && isAdmin()
+        && request.resource.data.get('treasuryStatus', 'requested') in [
+          'requested',
+          'under_review',
+          'approved_for_treasury',
+          'rejected'
+        ];
 
       allow delete: if false;
     }

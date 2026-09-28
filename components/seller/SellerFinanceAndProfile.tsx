@@ -19,7 +19,12 @@ import {
   Download,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
-import { Order, Seller, SupportTicket } from '@/lib/types';
+import {
+  Order,
+  Seller,
+  SupportTicket,
+  calculateSellerPayoutReservation,
+} from '@/lib/types';
 import { maskIban, maskIbanInText } from '@/lib/utils';
 
 interface SellerFinanceAndProfileProps {
@@ -45,9 +50,23 @@ export default function SellerFinanceAndProfile({
   } = useMarketplace();
 
   // ============================================================================
-  // 1. PAYOUT REQUEST STATE
+  // 1. PAYOUT RESERVATION & REQUEST STATE
   // ============================================================================
-  const [payoutAmount, setPayoutAmount] = useState<number>(seller.availableBalance);
+  // Calculates:
+  // - availableBalance (from seller.availableBalance)
+  // - reservedPendingPayoutAmount (sum of payout tickets with workflowType === 'payout'
+  //   and treasuryStatus in ['requested', 'under_review', 'approved_for_treasury'])
+  // - requestableBalance = seller.availableBalance - reservedPendingPayoutAmount
+  const payoutReservation = useMemo(
+    () => calculateSellerPayoutReservation(seller, tickets),
+    [seller, tickets]
+  );
+  const { availableBalance, reservedPendingPayoutAmount, requestableBalance } =
+    payoutReservation;
+
+  const [payoutAmount, setPayoutAmount] = useState<number>(() =>
+    calculateSellerPayoutReservation(seller, tickets).requestableBalance
+  );
 
   // ============================================================================
   // 2. STORE PROFILE EDITOR STATE (SAFE WHITELISTED FIELDS ONLY)
@@ -317,8 +336,7 @@ export default function SellerFinanceAndProfile({
   if (mode === 'payouts') {
     const sellerPayoutTickets = tickets.filter(
       (tkt) =>
-        (tkt.workflowType === 'payout' || tkt.ticketNumber.startsWith('PAY-')) &&
-        (tkt.sellerId === seller.id || tkt.subject.includes(seller.nameAr))
+        tkt.workflowType === 'payout' && tkt.sellerId === seller.id
     );
 
     const getTreasuryBadgeLabel = (status?: SupportTicket['treasuryStatus']) => {
@@ -333,12 +351,15 @@ export default function SellerFinanceAndProfile({
         case 'completed':
           return t('مكتمل دفترياً (completed)', 'Completed in Ledger');
         case 'rejected':
-          return t('مرفوض (rejected)', 'Rejected');
+          return t('مرفوض — تم تحرير الحجز (rejected)', 'Rejected — Reservation Released');
         case 'requested':
         default:
           return t('طلب مسجل بانتظار المراجعة (requested)', 'Requested — Awaiting Audit');
       }
     };
+
+    const isAmountOverRequestable = payoutAmount > requestableBalance;
+    const isPayoutDisabled = payoutAmount <= 0 || payoutAmount > requestableBalance;
 
     return (
       <div className="space-y-6">
@@ -357,13 +378,47 @@ export default function SellerFinanceAndProfile({
               <Wallet className="w-8 h-8 text-[#0B4F3F]" />
             </div>
 
-            <div className="p-4 rounded-xl bg-[#0B4F3F] text-white space-y-1">
-              <span className="text-xs text-[#F5E6C8]">
-                {t('الرصيد المتاح لطلب التسوية', 'Available Balance for Treasury Request')}
-              </span>
-              <div className="text-2xl font-bold font-mono">
-                {formatPrice(seller.availableBalance)}
+            {/* Available Balance, Pending Reserved Payouts, and Currently Requestable Balance */}
+            <div className="p-4 rounded-xl bg-[#0B4F3F] text-white space-y-3">
+              <div className="flex items-baseline justify-between border-b border-white/15 pb-2.5">
+                <div>
+                  <span className="text-xs text-[#F5E6C8] block">
+                    {t(
+                      'الرصيد القابل للطلب حالياً (Currently Requestable Balance)',
+                      'Currently Requestable Balance'
+                    )}
+                  </span>
+                  <div className="text-2xl font-bold font-mono text-white mt-0.5">
+                    {formatPrice(requestableBalance)}
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 rounded bg-white/10 text-[#C59B27] text-[10px] font-mono font-bold">
+                  {t('الحد الأقصى للطلب', 'MAX REQUESTABLE')}
+                </span>
               </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-2.5 rounded-lg bg-white/10">
+                  <span className="text-[11px] text-[#D6D0C4] block">
+                    {t('الرصيد المتاح (Available Balance)', 'Available Balance')}
+                  </span>
+                  <span className="font-mono font-bold text-white text-sm">
+                    {formatPrice(availableBalance)}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-white/10">
+                  <span className="text-[11px] text-[#F5E6C8] block">
+                    {t(
+                      'طلبات محجوزة قيد المراجعة (Pending Reserved)',
+                      'Pending Reserved Payouts'
+                    )}
+                  </span>
+                  <span className="font-mono font-bold text-[#C59B27] text-sm">
+                    {formatPrice(reservedPendingPayoutAmount)}
+                  </span>
+                </div>
+              </div>
+
               <div className="text-[11px] text-[#C59B27] font-mono">
                 {t('موعد دورة التسوية القادمة:', 'Next Scheduled Settlement Cycle:')}{' '}
                 {seller.nextPayoutDate}
@@ -372,7 +427,10 @@ export default function SellerFinanceAndProfile({
 
             <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-1 text-xs">
               <div className="text-[#8C857B]">
-                {t('الحساب البنكي المعتمد (يُحفظ آخر ٤ أرقام فقط في التذكرة):', 'Verified Saudi IBAN (only last 4 digits stored in ticket):')}
+                {t(
+                  'الحساب البنكي المعتمد (يُحفظ آخر ٤ أرقام فقط في التذكرة):',
+                  'Verified Saudi IBAN (only last 4 digits stored in ticket):'
+                )}
               </div>
               <div className="font-bold text-[#141413]">{seller.ownerName}</div>
               <div className="font-mono font-bold text-[#0B4F3F]" dir="ltr">
@@ -388,30 +446,59 @@ export default function SellerFinanceAndProfile({
                   </label>
                   <button
                     type="button"
-                    onClick={() => setPayoutAmount(seller.availableBalance)}
+                    onClick={() => setPayoutAmount(requestableBalance)}
                     className="text-[11px] font-bold text-[#0B4F3F] hover:underline"
                   >
-                    {t('اختيار كامل الرصيد', 'Select Full Balance')}
+                    {t(
+                      `اختيار كامل الرصيد القابل للطلب (${formatPrice(requestableBalance)})`,
+                      `Select Max Requestable (${formatPrice(requestableBalance)})`
+                    )}
                   </button>
                 </div>
                 <input
                   type="number"
-                  min={100}
-                  max={seller.availableBalance}
+                  min={requestableBalance > 0 ? 1 : 0}
+                  max={requestableBalance}
                   value={payoutAmount}
-                  onChange={(e) =>
-                    setPayoutAmount(
-                      Math.min(seller.availableBalance, Math.max(0, Number(e.target.value) || 0))
-                    )
-                  }
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-sm font-mono font-bold text-[#0B4F3F]"
+                  onChange={(e) => setPayoutAmount(Math.max(0, Number(e.target.value) || 0))}
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border text-sm font-mono font-bold ${
+                    isAmountOverRequestable
+                      ? 'border-[#9E2A2B] text-[#9E2A2B]'
+                      : 'border-[#E6E0D6] text-[#0B4F3F]'
+                  }`}
                 />
+                {isAmountOverRequestable && (
+                  <p className="text-[11px] font-semibold text-[#9E2A2B] mt-1">
+                    {t(
+                      `المبلغ المطلوب (${formatPrice(payoutAmount)}) يتجاوز الرصيد القابل للطلب حالياً (${formatPrice(
+                        requestableBalance
+                      )}) بعد خصم الطلبات المحجوزة قيد المعالجة (${formatPrice(
+                        reservedPendingPayoutAmount
+                      )}).`,
+                      `Requested amount (${formatPrice(payoutAmount)}) exceeds currently requestable balance (${formatPrice(
+                        requestableBalance
+                      )}) after pending reserved payouts (${formatPrice(
+                        reservedPendingPayoutAmount
+                      )}).`
+                    )}
+                  </p>
+                )}
               </div>
 
               <button
                 type="button"
-                disabled={payoutAmount <= 0 || payoutAmount > seller.availableBalance}
-                onClick={() => requestSellerPayout(seller.id, payoutAmount)}
+                disabled={isPayoutDisabled}
+                onClick={async () => {
+                  const requested = payoutAmount;
+                  await requestSellerPayout(seller.id, requested);
+                  if (requested > 0 && requested <= requestableBalance) {
+                    const nextRemaining = Math.max(
+                      0,
+                      Number((requestableBalance - requested).toFixed(2))
+                    );
+                    setPayoutAmount(nextRemaining);
+                  }
+                }}
                 className="w-full py-3 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] disabled:opacity-40 text-white text-xs font-bold shadow-xs"
               >
                 {t(
@@ -424,8 +511,8 @@ export default function SellerFinanceAndProfile({
                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
                   {t(
-                    'ضمان أمان الخزينة: يُنشئ هذا الإجراء تذكرة تسوية مهيكلة (workflowType = payout) مع حفظ آخر ٤ أرقام فقط من الآيبان دون تنفيذ تحويل بنكي خارجي تلقائي.',
-                    'Treasury Safety: Submitting creates a structured payout ticket (ibanLast4 only, treasuryStatus = requested) for financial audit and external bank execution.'
+                    'ضمان أمان الخزينة: تحجز طلبات التسوية النشطة (requested / under_review / approved_for_treasury) قيمتها من الرصيد القابل للطلب لمنع ازدواج الصرف، بينما يُحرَّر الحجز تلقائياً عند رفض الطلب. ملاحظة معمارية: الحجز الذري الكامل المقاوم للتلاعب في بيئة الإنتاج يتطلب خدمة معاملات خادم موثوقة (Trusted Backend Transaction Service).',
+                    'Treasury Safety: Active payout tickets (requested / under_review / approved_for_treasury) reserve funds from requestableBalance, while rejected tickets release their reservation. Architectural note: tamper-proof atomic aggregate reservation in production ultimately requires a trusted backend transaction service.'
                   )}
                 </span>
               </div>

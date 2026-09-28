@@ -458,6 +458,57 @@ export interface SupportTicket {
   repliedAt?: string;
 }
 
+export const ACTIVE_PAYOUT_RESERVATION_STATUSES: ReadonlyArray<
+  NonNullable<SupportTicket['treasuryStatus']>
+> = ['requested', 'under_review', 'approved_for_treasury'];
+
+/**
+ * Calculates a Seller's payout reservation summary from structured `payout` tickets.
+ *
+ * Tickets with `workflowType === 'payout'` and `treasuryStatus` in
+ * `['requested', 'under_review', 'approved_for_treasury']` reserve funds against `availableBalance`.
+ * Rejected (`'rejected'`) and backend-completed (`'completed'`) tickets do not reserve pending funds.
+ *
+ * Architectural Note: Because client-side Firestore cannot enforce a tamper-proof aggregate reservation
+ * across arbitrary ticket documents, production-grade atomic payout reservation ultimately requires a
+ * trusted backend / Cloud Function transaction service.
+ */
+export function calculateSellerPayoutReservation(
+  seller: Pick<Seller, 'id' | 'availableBalance'>,
+  tickets: SupportTicket[]
+): {
+  availableBalance: number;
+  reservedPendingPayoutAmount: number;
+  requestableBalance: number;
+} {
+  const availableBalance = Math.max(0, Number((seller.availableBalance || 0).toFixed(2)));
+  const reservedPendingPayoutAmount = Number(
+    tickets
+      .filter((tkt) => {
+        if (tkt.workflowType !== 'payout' || tkt.sellerId !== seller.id) {
+          return false;
+        }
+        const treasuryState = tkt.treasuryStatus || 'requested';
+        return (
+          treasuryState === 'requested' ||
+          treasuryState === 'under_review' ||
+          treasuryState === 'approved_for_treasury'
+        );
+      })
+      .reduce((sum, tkt) => sum + Math.max(0, Number(tkt.payoutAmount || 0)), 0)
+      .toFixed(2)
+  );
+  const requestableBalance = Math.max(
+    0,
+    Number((availableBalance - reservedPendingPayoutAmount).toFixed(2))
+  );
+  return {
+    availableBalance,
+    reservedPendingPayoutAmount,
+    requestableBalance,
+  };
+}
+
 export interface AuditLogEntry {
   id: string;
   actorName: string;

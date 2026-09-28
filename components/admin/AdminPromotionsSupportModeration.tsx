@@ -38,6 +38,7 @@ export default function AdminPromotionsSupportModeration({
     lang,
     t,
     formatPrice,
+    isDemoMode,
     coupons,
     sellers,
     tickets,
@@ -818,9 +819,14 @@ export default function AdminPromotionsSupportModeration({
                               'Approved for Treasury (approved_for_treasury)'
                             )}
                           </option>
-                          <option value="completed">
-                            {t('مكتمل الدفترياً (completed)', 'Completed in Ledger (completed)')}
-                          </option>
+                          {isDemoMode && (
+                            <option value="completed">
+                              {t(
+                                'محاكاة اكتمال دفتري محلياً — وضع تجريبي فقط (completed)',
+                                'Simulate Completed in Ledger — Demo Mode Only (completed)'
+                              )}
+                            </option>
+                          )}
                           <option value="rejected">
                             {t('مرفوض (rejected)', 'Rejected (rejected)')}
                           </option>

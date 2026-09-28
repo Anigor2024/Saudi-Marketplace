@@ -714,7 +714,13 @@ export function HomeView() {
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       {lang === 'ar' ? seller.cityAr : seller.cityEn}
                     </span>
-                    <span className="font-mono">CR: {seller.crNumber}</span>
+                    <span className="font-mono">
+                      {seller.crNumber
+                        ? `CR: ${seller.crNumber}`
+                        : seller.verifiedBadge
+                        ? t('متجر موثق ✓', 'Verified Boutique ✓')
+                        : t('شريك معتمد', 'Approved Partner')}
+                    </span>
                   </div>
                 </div>
               ))}
