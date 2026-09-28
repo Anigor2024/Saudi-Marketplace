@@ -75,7 +75,7 @@ export const SEED_PRODUCTS_PART_A: Product[] = [
     isTrending: true,
     isBestSeller: true,
     isNewArrival: false,
-    frequentlyBoughtWith: ['prod-2', 'prod-5'],
+    frequentlyBoughtWith: ['prod-2', 'prod-3'],
     createdAt: '2026-08-10',
   },
   {
@@ -137,7 +137,7 @@ export const SEED_PRODUCTS_PART_A: Product[] = [
     isTrending: false,
     isBestSeller: true,
     isNewArrival: true,
-    frequentlyBoughtWith: ['prod-6', 'prod-29'],
+    frequentlyBoughtWith: ['prod-1', 'prod-3'],
     createdAt: '2026-09-01',
   },
   {
@@ -847,8 +847,8 @@ export const SEED_PRODUCTS_PART_A: Product[] = [
     price: 11499,
     originalPrice: 13999,
     discountPercent: 18,
-    stock: 8,
-    lowStockThreshold: 2,
+    stock: 3,
+    lowStockThreshold: 4,
     status: 'active',
     rating: 4.95,
     reviewCount: 44,

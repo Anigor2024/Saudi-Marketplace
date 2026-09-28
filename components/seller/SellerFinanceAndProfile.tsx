@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
 import { Order, Seller } from '@/lib/types';
+import { maskIban, maskIbanInText } from '@/lib/utils';
 
 interface SellerFinanceAndProfileProps {
   seller: Seller;
@@ -349,7 +350,9 @@ export default function SellerFinanceAndProfile({
                 {t('الحساب البنكي المعتمد (آيبان سعودي):', 'Verified Saudi IBAN Beneficiary:')}
               </div>
               <div className="font-bold text-[#141413]">{seller.ownerName}</div>
-              <div className="font-mono font-bold text-[#0B4F3F]">{seller.iban}</div>
+              <div className="font-mono font-bold text-[#0B4F3F]" dir="ltr">
+                {maskIban(seller.iban)}
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -428,7 +431,9 @@ export default function SellerFinanceAndProfile({
               .filter(
                 (tkt) =>
                   tkt.ticketNumber.startsWith('PAY-') &&
-                  (tkt.subject.includes(seller.nameAr) || tkt.message.includes(seller.iban))
+                  (tkt.subject.includes(seller.nameAr) ||
+                    tkt.message.includes(maskIban(seller.iban)) ||
+                    tkt.message.includes(seller.iban))
               )
               .map((tkt) => (
                 <div
@@ -443,7 +448,9 @@ export default function SellerFinanceAndProfile({
                       </span>
                     </div>
                     <div className="font-semibold text-[#141413]">{tkt.subject}</div>
-                    <div className="text-[11px] text-[#57534E]">{tkt.message}</div>
+                    <div className="text-[11px] text-[#57534E]">
+                      {maskIbanInText(tkt.message)}
+                    </div>
                   </div>
                   <div className="text-end font-mono text-[11px] text-[#8C857B]">
                     {tkt.createdAt}
@@ -484,8 +491,12 @@ export default function SellerFinanceAndProfile({
                       <div className="font-semibold text-[#141413]">
                         {lang === 'ar' ? pay.bankNameAr : pay.bankNameEn}
                       </div>
-                      <div className="text-[11px] font-mono text-[#8C857B]">
-                        IBAN: ****{pay.ibanLast4} · {pay.date}
+                      <div className="text-[11px] font-mono text-[#8C857B]" dir="ltr">
+                        IBAN:{' '}
+                        {pay.ibanLast4 && seller.iban.endsWith(pay.ibanLast4)
+                          ? maskIban(seller.iban)
+                          : `SA** **** **** **** **** ${pay.ibanLast4}`}{' '}
+                        · {pay.date}
                       </div>
                     </div>
 

@@ -69,6 +69,44 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/products/$(productId)).data.sellerId == currentUserData().sellerId;
     }
 
+    // Helper: Validates a single Frequently Bought Together bundled product ID:
+    // - must be a valid string ID
+    // - must not reference the product itself (no self-bundling)
+    // - must exist in /products/{bundleId}
+    // - must belong to the exact same sellerId
+    function isValidBundleItem(bundleId, selfProductId, expectedSellerId) {
+      return bundleId is string
+        && isValidId(bundleId)
+        && bundleId != selfProductId
+        && exists(/databases/$(database)/documents/products/$(bundleId))
+        && get(/databases/$(database)/documents/products/$(bundleId)).data.sellerId == expectedSellerId;
+    }
+
+    // Helper: Validates frequentlyBoughtWith list on product create/update (max 4 unique same-seller SKUs)
+    function isValidFrequentlyBoughtWith(data, selfProductId, expectedSellerId) {
+      return !('frequentlyBoughtWith' in data)
+        || (
+          data.frequentlyBoughtWith is list
+          && data.frequentlyBoughtWith.size() <= 4
+          && (data.frequentlyBoughtWith.size() < 1 || isValidBundleItem(data.frequentlyBoughtWith[0], selfProductId, expectedSellerId))
+          && (data.frequentlyBoughtWith.size() < 2 || (
+            data.frequentlyBoughtWith[1] != data.frequentlyBoughtWith[0]
+            && isValidBundleItem(data.frequentlyBoughtWith[1], selfProductId, expectedSellerId)
+          ))
+          && (data.frequentlyBoughtWith.size() < 3 || (
+            data.frequentlyBoughtWith[2] != data.frequentlyBoughtWith[0]
+            && data.frequentlyBoughtWith[2] != data.frequentlyBoughtWith[1]
+            && isValidBundleItem(data.frequentlyBoughtWith[2], selfProductId, expectedSellerId)
+          ))
+          && (data.frequentlyBoughtWith.size() < 4 || (
+            data.frequentlyBoughtWith[3] != data.frequentlyBoughtWith[0]
+            && data.frequentlyBoughtWith[3] != data.frequentlyBoughtWith[1]
+            && data.frequentlyBoughtWith[3] != data.frequentlyBoughtWith[2]
+            && isValidBundleItem(data.frequentlyBoughtWith[3], selfProductId, expectedSellerId)
+          ))
+        );
+    }
+
     // Helper for Verified Purchase Review Integrity:
     // Ensures the referenced order exists, belongs to request.auth.uid, has status == 'delivered',
     // AND its immutable `productIds` list explicitly contains the reviewed `productId`.
@@ -111,7 +149,7 @@ service cloud.firestore {
             && request.resource.data.isTrending == false
             && request.resource.data.isBestSeller == false
             && request.resource.data.status in ['active', 'draft', 'out_of_stock']
-            && (!('frequentlyBoughtWith' in request.resource.data) || (request.resource.data.frequentlyBoughtWith is list && request.resource.data.frequentlyBoughtWith.size() <= 10))
+            && isValidFrequentlyBoughtWith(request.resource.data, productId, request.resource.data.sellerId)
           )
         );
 
@@ -132,6 +170,7 @@ service cloud.firestore {
             && request.resource.data.reviewCount == resource.data.reviewCount
             && request.resource.data.soldCount == resource.data.soldCount
             && request.resource.data.status in ['active', 'draft', 'out_of_stock']
+            && isValidFrequentlyBoughtWith(request.resource.data, productId, resource.data.sellerId)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'sku',
               'titleAr',

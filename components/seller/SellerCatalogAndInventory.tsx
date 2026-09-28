@@ -96,7 +96,7 @@ export default function SellerCatalogAndInventory({
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | ProductStatus>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'out' | 'healthy'>('all');
+  const [stockFilter, setStockFilter] = useState<'all' | 'healthy' | 'low' | 'critical' | 'out'>('all');
   const [sortBy, setSortBy] = useState<'newest' | 'price_desc' | 'price_asc' | 'stock_asc' | 'sold_desc'>('newest');
 
   // Bulk Selection State
@@ -142,16 +142,31 @@ export default function SellerCatalogAndInventory({
   const [formVariants, setFormVariants] = useState<ProductVariantGroup[]>([]);
   const [formSpecs, setFormSpecs] = useState<ProductSpec[]>([]);
 
-  // Inventory KPIs
+  // Deterministic 4-tier Inventory Health Classification:
+  // Out of Stock: stock <= 0 OR status == 'out_of_stock'
+  // Critical:     stock > 0 AND stock <= max(1, floor(lowStockThreshold / 2))
+  // Low Stock:    stock > criticalLimit AND stock <= lowStockThreshold
+  // Healthy:      stock > lowStockThreshold
+  const getInventoryHealthState = (p: Product): 'out' | 'critical' | 'low' | 'healthy' => {
+    if (p.stock <= 0 || p.status === 'out_of_stock') return 'out';
+    const criticalLimit = Math.max(1, Math.floor(p.lowStockThreshold / 2));
+    if (p.stock > 0 && p.stock <= criticalLimit) return 'critical';
+    if (p.stock > criticalLimit && p.stock <= p.lowStockThreshold) return 'low';
+    return 'healthy';
+  };
+
+  // Inventory KPIs (strictly mutually exclusive — Critical is never double-counted as Low Stock)
   const inventoryStats = useMemo(() => {
-    const healthy = sellerProducts.filter((p) => p.stock > p.lowStockThreshold);
-    const low = sellerProducts.filter((p) => p.stock > 0 && p.stock <= p.lowStockThreshold);
-    const out = sellerProducts.filter((p) => p.stock <= 0 || p.status === 'out_of_stock');
+    const healthy = sellerProducts.filter((p) => getInventoryHealthState(p) === 'healthy');
+    const low = sellerProducts.filter((p) => getInventoryHealthState(p) === 'low');
+    const critical = sellerProducts.filter((p) => getInventoryHealthState(p) === 'critical');
+    const out = sellerProducts.filter((p) => getInventoryHealthState(p) === 'out');
     const totalUnits = sellerProducts.reduce((sum, p) => sum + Math.max(0, p.stock), 0);
     const totalValuation = sellerProducts.reduce((sum, p) => sum + Math.max(0, p.stock) * p.price, 0);
     return {
       healthyCount: healthy.length,
       lowCount: low.length,
+      criticalCount: critical.length,
       outCount: out.length,
       totalUnits,
       totalValuation,
@@ -173,9 +188,8 @@ export default function SellerCatalogAndInventory({
         }
         if (statusFilter !== 'all' && p.status !== statusFilter) return false;
         if (categoryFilter !== 'all' && p.categoryId !== categoryFilter) return false;
-        if (stockFilter === 'low' && !(p.stock > 0 && p.stock <= p.lowStockThreshold)) return false;
-        if (stockFilter === 'out' && !(p.stock <= 0 || p.status === 'out_of_stock')) return false;
-        if (stockFilter === 'healthy' && !(p.stock > p.lowStockThreshold)) return false;
+        const healthState = getInventoryHealthState(p);
+        if (stockFilter !== 'all' && healthState !== stockFilter) return false;
         return true;
       })
       .sort((a, b) => {
@@ -217,8 +231,13 @@ export default function SellerCatalogAndInventory({
         prod.flashDealEndsAt ? prod.flashDealEndsAt.split('T')[0] : '2026-12-31'
       );
       setFormIsSeasonal(Boolean(prod.isSeasonal));
+      const validSameSellerIds = new Set(
+        sellerProducts.filter((sp) => sp.id !== prod.id).map((sp) => sp.id)
+      );
       setFormFrequentlyBoughtWith(
-        prod.frequentlyBoughtWith ? [...prod.frequentlyBoughtWith] : []
+        Array.from(
+          new Set((prod.frequentlyBoughtWith || []).filter((id) => validSameSellerIds.has(id)))
+        ).slice(0, 4)
       );
       setFormImages(prod.images.length > 0 ? [...prod.images] : [LUXURY_IMAGE_PRESETS[0].url]);
       setFormVariants(prod.variants ? JSON.parse(JSON.stringify(prod.variants)) : []);
@@ -351,7 +370,16 @@ export default function SellerCatalogAndInventory({
         ? `${formFlashDealEndsAt || '2026-12-31'}T23:59:59Z`
         : undefined,
       isSeasonal: formIsSeasonal,
-      frequentlyBoughtWith: formFrequentlyBoughtWith.slice(0, 10),
+      frequentlyBoughtWith: Array.from(
+        new Set(
+          formFrequentlyBoughtWith.filter(
+            (id) =>
+              typeof id === 'string' &&
+              id !== (editingProduct ? editingProduct.id : '') &&
+              sellerProducts.some((sp) => sp.id === id)
+          )
+        )
+      ).slice(0, 4),
       isFeatured: editingProduct ? editingProduct.isFeatured : false,
       isTrending: editingProduct ? editingProduct.isTrending : false,
       isBestSeller: editingProduct ? editingProduct.isBestSeller : false,
@@ -422,7 +450,10 @@ export default function SellerCatalogAndInventory({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {mode === 'inventory' && (inventoryStats.lowCount > 0 || inventoryStats.outCount > 0) && (
+          {mode === 'inventory' &&
+            (inventoryStats.lowCount > 0 ||
+              inventoryStats.criticalCount > 0 ||
+              inventoryStats.outCount > 0) && (
             <button
               type="button"
               onClick={handleRestockAllLow}
@@ -430,7 +461,7 @@ export default function SellerCatalogAndInventory({
             >
               <RefreshCw className="w-3.5 h-3.5 text-[#B8860B]" />
               <span>
-                {t('تزويد جميع المنتجات المنخفضة (+١٥ قطعة)', 'Restock All Low/Out SKUs (+15)')}
+                {t('تزويد جميع المنتجات الحرجة والمنخفضة (+١٥ قطعة)', 'Restock Critical/Low/Out SKUs (+15)')}
               </span>
             </button>
           )}
@@ -445,8 +476,8 @@ export default function SellerCatalogAndInventory({
         </div>
       </div>
 
-      {/* Inventory KPI Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Inventory KPI Summary Cards (All, Healthy, Low Stock, Critical, Out of Stock) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div
           onClick={() => setStockFilter('all')}
           className={`bg-white rounded-2xl border p-5 cursor-pointer transition-all ${
@@ -455,7 +486,7 @@ export default function SellerCatalogAndInventory({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#57534E]">
-              {t('إجمالي وحدات المخزون والقيمة', 'Total Stock Units & Retail Value')}
+              {t('إجمالي الوحدات والقيمة المقدرة', 'Total Units & Est. Inventory Value')}
             </span>
             <Boxes className="w-4 h-4 text-[#0B4F3F]" />
           </div>
@@ -464,7 +495,7 @@ export default function SellerCatalogAndInventory({
             <span className="text-xs font-normal text-[#8C857B]">{t('قطعة', 'units')}</span>
           </div>
           <div className="text-[11px] text-[#0B4F3F] font-mono font-semibold mt-1">
-            {t('القيمة السوقية:', 'Retail Valuation:')} {formatPrice(inventoryStats.totalValuation)}
+            {t('القيمة المقدرة:', 'Est. Value:')} {formatPrice(inventoryStats.totalValuation)}
           </div>
         </div>
 
@@ -476,7 +507,7 @@ export default function SellerCatalogAndInventory({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#57534E]">
-              {t('منتجات بمخزون وفير وآمن', 'Healthy Stock SKUs')}
+              {t('مخزون سليم ووفير (Healthy)', 'Healthy')}
             </span>
             <CheckCircle2 className="w-4 h-4 text-[#1E6B47]" />
           </div>
@@ -484,7 +515,7 @@ export default function SellerCatalogAndInventory({
             {inventoryStats.healthyCount}
           </div>
           <div className="text-[11px] text-[#8C857B] mt-1">
-            {t('أعلى من حد التنبيه الأدنى', 'Above low-stock threshold')}
+            {t('أعلى من حد التنبيه الأدنى', 'Stock > lowStockThreshold')}
           </div>
         </div>
 
@@ -496,7 +527,7 @@ export default function SellerCatalogAndInventory({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#57534E]">
-              {t('تنبيهات انخفاض المخزون', 'Low Stock Alerts')}
+              {t('مخزون منخفض (Low Stock)', 'Low Stock')}
             </span>
             <AlertTriangle className="w-4 h-4 text-[#C87D12]" />
           </div>
@@ -504,7 +535,27 @@ export default function SellerCatalogAndInventory({
             {inventoryStats.lowCount}
           </div>
           <div className="text-[11px] text-[#C87D12] font-semibold mt-1">
-            {t('تحتاج لإعادة التزويد قريباً', 'Requires replenishment soon')}
+            {t('يحتاج لإعادة التزويد قريباً', 'Above critical, <= threshold')}
+          </div>
+        </div>
+
+        <div
+          onClick={() => setStockFilter('critical')}
+          className={`bg-white rounded-2xl border p-5 cursor-pointer transition-all ${
+            stockFilter === 'critical' ? 'border-[#B45309] ring-1 ring-[#B45309]/25' : 'border-[#E6E0D6]'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-[#57534E]">
+              {t('مخزون حرج (Critical)', 'Critical')}
+            </span>
+            <AlertTriangle className="w-4 h-4 text-[#B45309]" />
+          </div>
+          <div className="text-2xl font-bold font-mono text-[#B45309] mt-2">
+            {inventoryStats.criticalCount}
+          </div>
+          <div className="text-[11px] text-[#B45309] font-semibold mt-1">
+            {t('أوشك على النفاد الفوري (<= نصف الحد)', 'Stock <= max(1, floor(threshold/2))')}
           </div>
         </div>
 
@@ -516,7 +567,7 @@ export default function SellerCatalogAndInventory({
         >
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#57534E]">
-              {t('منتجات نفدت من المخزون', 'Out-of-Stock SKUs')}
+              {t('نفد المخزون (Out of Stock)', 'Out of Stock')}
             </span>
             <XCircle className="w-4 h-4 text-[#9E2A2B]" />
           </div>
@@ -524,7 +575,7 @@ export default function SellerCatalogAndInventory({
             {inventoryStats.outCount}
           </div>
           <div className="text-[11px] text-[#8C857B] mt-1">
-            {t('متوقفة عن البيع مؤقتاً حتى التزويد', 'Hidden from checkout until restocked')}
+            {t('متوقفة عن البيع مؤقتاً حتى التزويد', 'Stock <= 0 or status out_of_stock')}
           </div>
         </div>
       </div>
@@ -532,7 +583,7 @@ export default function SellerCatalogAndInventory({
       {/* Filter & Search Toolbar */}
       <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-          <div className="md:col-span-5 relative">
+          <div className="md:col-span-4 relative">
             <Search className="w-4 h-4 text-[#8C857B] absolute top-1/2 -translate-y-1/2 start-3.5" />
             <input
               type="text"
@@ -562,6 +613,24 @@ export default function SellerCatalogAndInventory({
 
           <div className="md:col-span-2">
             <select
+              value={stockFilter}
+              onChange={(e) =>
+                setStockFilter(
+                  e.target.value as 'all' | 'healthy' | 'low' | 'critical' | 'out'
+                )
+              }
+              className="w-full px-3 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
+            >
+              <option value="all">{t('كل مستويات المخزون', 'All Inventory Levels')}</option>
+              <option value="healthy">{t('مخزون سليم (Healthy)', 'Healthy')}</option>
+              <option value="low">{t('مخزون منخفض (Low Stock)', 'Low Stock')}</option>
+              <option value="critical">{t('مخزون حرج (Critical)', 'Critical')}</option>
+              <option value="out">{t('نفد المخزون (Out of Stock)', 'Out of Stock')}</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-2">
+            <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
               className="w-full px-3 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
@@ -575,7 +644,7 @@ export default function SellerCatalogAndInventory({
             </select>
           </div>
 
-          <div className="md:col-span-3">
+          <div className="md:col-span-2">
             <select
               value={sortBy}
               onChange={(e) =>
@@ -700,8 +769,10 @@ export default function SellerCatalogAndInventory({
               </thead>
               <tbody className="divide-y divide-[#F3EFEA]">
                 {filteredProducts.map((prod) => {
-                  const isLow = prod.stock > 0 && prod.stock <= prod.lowStockThreshold;
-                  const isOut = prod.stock <= 0 || prod.status === 'out_of_stock';
+                  const healthState = getInventoryHealthState(prod);
+                  const isOut = healthState === 'out';
+                  const isCritical = healthState === 'critical';
+                  const isLow = healthState === 'low';
                   const currentDraftStock = stockDrafts[prod.id] ?? prod.stock;
                   const currentDraftThreshold = thresholdDrafts[prod.id] ?? prod.lowStockThreshold;
                   const netAfterComm = Math.round(prod.price * (1 - seller.commissionRate / 100));
@@ -875,6 +946,8 @@ export default function SellerCatalogAndInventory({
                                 className={`font-mono font-bold text-sm ${
                                   isOut
                                     ? 'text-[#9E2A2B]'
+                                    : isCritical
+                                    ? 'text-[#B45309]'
                                     : isLow
                                     ? 'text-[#C87D12]'
                                     : 'text-[#1E6B47]'
@@ -893,8 +966,8 @@ export default function SellerCatalogAndInventory({
                         )}
                       </td>
 
-                      {/* Status Badge */}
-                      <td className="py-4 px-4">
+                      {/* Status & Inventory Health Badge */}
+                      <td className="py-4 px-4 space-y-1">
                         <span
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-bold ${
                             prod.status === 'active' && !isOut
@@ -903,7 +976,7 @@ export default function SellerCatalogAndInventory({
                               ? 'bg-[#F3EFEA] text-[#57534E]'
                               : prod.status === 'suspended'
                               ? 'bg-red-100 text-[#9E2A2B]'
-                              : 'bg-amber-50 text-[#C87D12]'
+                              : 'bg-red-50 text-[#9E2A2B]'
                           }`}
                         >
                           {prod.status === 'active' && !isOut
@@ -912,13 +985,27 @@ export default function SellerCatalogAndInventory({
                             ? t('مسودة', 'Draft')
                             : prod.status === 'suspended'
                             ? t('موقوف إدارياً', 'Suspended')
-                            : t('نفد المخزون', 'Out of Stock')}
+                            : t('نفد المخزون (Out of Stock)', 'Out of Stock')}
                         </span>
-                        {isLow && !isOut && (
-                          <div className="text-[10px] text-[#C87D12] font-bold mt-1">
-                            {t('مخزون منخفض!', 'Low Stock!')}
-                          </div>
-                        )}
+                        <div>
+                          {isOut ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-red-50 text-[#9E2A2B] border border-[#9E2A2B]/20 text-[10px] font-bold">
+                              {t('نفد المخزون (Out of Stock)', 'Out of Stock')}
+                            </span>
+                          ) : isCritical ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-orange-100 text-[#B45309] border border-[#B45309]/30 text-[10px] font-bold">
+                              {t('مخزون حرج (Critical)', 'Critical')}
+                            </span>
+                          ) : isLow ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#FBF7EC] text-[#C87D12] border border-[#C59B27]/40 text-[10px] font-bold">
+                              {t('مخزون منخفض (Low Stock)', 'Low Stock')}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#EBF3F0]/70 text-[#1E6B47] text-[10px] font-bold">
+                              {t('مخزون سليم (Healthy)', 'Healthy')}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Actions */}

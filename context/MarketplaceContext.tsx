@@ -62,6 +62,7 @@ import {
 } from '../lib/seed-catalog';
 import { SEED_PRODUCTS_PART_A } from '../lib/seed-products-a';
 import { SEED_PRODUCTS_PART_B } from '../lib/seed-products-b';
+import { maskIban } from '../lib/utils';
 
 const INITIAL_ALL_PRODUCTS: Product[] = [...SEED_PRODUCTS_PART_A, ...SEED_PRODUCTS_PART_B];
 
@@ -2156,13 +2157,38 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
-      const sellerDoc = sellers.find((s) => s.id === (currentUser.sellerId || product.sellerId));
+      const effectiveSellerId = existingProd
+        ? existingProd.sellerId
+        : currentUser.role === 'seller'
+        ? currentUser.sellerId!
+        : product.sellerId;
+      const sellerDoc = sellers.find((s) => s.id === effectiveSellerId);
+
+      // Harden frequentlyBoughtWith:
+      // - Deduplicate string IDs
+      // - Exclude self-reference (id !== product.id)
+      // - Require every bundled product to exist and belong to the same sellerId
+      // - Limit to max 4 items
+      const sanitizedFrequentlyBoughtWith = Array.isArray(product.frequentlyBoughtWith)
+        ? Array.from(new Set(product.frequentlyBoughtWith))
+            .filter(
+              (bundledId) =>
+                typeof bundledId === 'string' &&
+                bundledId.trim().length > 0 &&
+                bundledId !== product.id &&
+                products.some((p) => p.id === bundledId && p.sellerId === effectiveSellerId)
+            )
+            .slice(0, 4)
+        : [];
 
       // Construct safe product object: sellers can NEVER alter platform-owned metrics
       // (sellerId, sellerRating, sellerVerified, rating, reviewCount, soldCount)
       const sanitizedProduct: Product =
         currentUser.role === 'admin'
-          ? product
+          ? {
+              ...product,
+              frequentlyBoughtWith: sanitizedFrequentlyBoughtWith,
+            }
           : existingProd
           ? {
               ...existingProd,
@@ -2193,7 +2219,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
               isFlashDeal: product.isFlashDeal,
               flashDealEndsAt: product.flashDealEndsAt,
               isSeasonal: product.isSeasonal,
-              frequentlyBoughtWith: product.frequentlyBoughtWith,
+              frequentlyBoughtWith: sanitizedFrequentlyBoughtWith,
               // Platform-owned metrics strictly preserved:
               sellerId: existingProd.sellerId,
               sellerNameAr: existingProd.sellerNameAr,
@@ -2211,6 +2237,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             }
           : {
               ...product,
+              frequentlyBoughtWith: sanitizedFrequentlyBoughtWith,
               sellerId: currentUser.sellerId!,
               sellerNameAr: sellerDoc?.nameAr || product.sellerNameAr,
               sellerNameEn: sellerDoc?.nameEn || product.sellerNameEn,
@@ -2999,6 +3026,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           // Sellers cannot directly modify authoritative financial balances in Firestore (`sellers/{sellerId}`);
           // submit a formal settlement request ticket for Admin/backend treasury execution.
           try {
+            const maskedTargetIban = maskIban(target.iban);
             const payoutTicket: SupportTicket = {
               id: `tkt-payout-${Date.now()}`,
               ticketNumber: `PAY-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -3008,7 +3036,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
               categoryAr: 'تسوية الأرباح والتحويلات البنكية (سار)',
               categoryEn: 'Merchant Payout Settlement (SARIE)',
               subject: `طلب تحويل أرباح متجر (${target.nameAr}) بمبلغ ${amount} ر.س`,
-              message: `طلب تسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المعتمد (${target.iban}).`,
+              message: `طلب تسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المعتمد (${maskedTargetIban}).`,
               status: 'open',
               createdAt: new Date().toISOString().split('T')[0],
             };

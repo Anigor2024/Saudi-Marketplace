@@ -60,6 +60,7 @@ export default function SellerCenter() {
     isDemoMode,
     sellers,
     products,
+    categories,
     orders,
     coupons,
     questions,
@@ -182,12 +183,19 @@ export default function SellerCenter() {
       .filter((p) => p.status === 'processing' || p.status === 'scheduled')
       .reduce((sum, p) => sum + p.amount, 0);
 
-    const lowStockProducts = sellerProducts.filter(
-      (p) => p.stock > 0 && p.stock <= p.lowStockThreshold
-    );
     const outOfStockProducts = sellerProducts.filter(
       (p) => p.stock <= 0 || p.status === 'out_of_stock'
     );
+    const criticalStockProducts = sellerProducts.filter((p) => {
+      if (p.stock <= 0 || p.status === 'out_of_stock') return false;
+      const criticalLimit = Math.max(1, Math.floor(p.lowStockThreshold / 2));
+      return p.stock > 0 && p.stock <= criticalLimit;
+    });
+    const lowStockProducts = sellerProducts.filter((p) => {
+      if (p.stock <= 0 || p.status === 'out_of_stock') return false;
+      const criticalLimit = Math.max(1, Math.floor(p.lowStockThreshold / 2));
+      return p.stock > criticalLimit && p.stock <= p.lowStockThreshold;
+    });
 
     const newPlacedOrders = sellerOrders.filter((o) => o.status === 'placed');
     const unansweredQuestions = sellerQuestions.filter((q) => !q.answerAr);
@@ -205,11 +213,88 @@ export default function SellerCenter() {
       availableBalance: activeSeller.availableBalance,
       pendingPayout,
       lowStockCount: lowStockProducts.length,
+      criticalStockCount: criticalStockProducts.length,
       outOfStockCount: outOfStockProducts.length,
       newPlacedCount: newPlacedOrders.length,
       unansweredCount: unansweredQuestions.length,
     };
   }, [activeSeller, sellerProducts, sellerOrders, sellerQuestions]);
+
+  // Deterministic Seller-Scoped Category Analytics
+  // Prefers actual seller order items (mapping item.productId -> seller's catalog product categoryId)
+  // and incorporates seller catalog product performance without Math.random.
+  const categoryAnalytics = useMemo(() => {
+    const productMap = new Map(sellerProducts.map((p) => [p.id, p]));
+    const catStats = new Map<
+      string,
+      {
+        categoryId: string;
+        nameAr: string;
+        nameEn: string;
+        revenue: number;
+        unitsSold: number;
+        skuCount: number;
+      }
+    >();
+
+    const ensureCategoryEntry = (categoryId: string) => {
+      const existing = catStats.get(categoryId);
+      if (existing) return existing;
+      const catMeta = categories.find((c) => c.id === categoryId);
+      const created = {
+        categoryId,
+        nameAr: catMeta?.nameAr || categoryId,
+        nameEn: catMeta?.nameEn || categoryId,
+        revenue: 0,
+        unitsSold: 0,
+        skuCount: sellerProducts.filter((sp) => sp.categoryId === categoryId).length,
+      };
+      catStats.set(categoryId, created);
+      return created;
+    };
+
+    // Track which products already have actual order items recorded
+    const productsWithOrderItems = new Set<string>();
+
+    sellerOrders.forEach((order) => {
+      if (order.status === 'cancelled') return;
+      order.items.forEach((item) => {
+        const matchedProd = productMap.get(item.productId);
+        if (item.sellerId !== activeSeller.id && !matchedProd) return;
+        const categoryId = matchedProd?.categoryId || activeSeller.categories[0] || 'electronics';
+        const entry = ensureCategoryEntry(categoryId);
+        entry.revenue += item.unitPrice * item.quantity;
+        entry.unitsSold += item.quantity;
+        productsWithOrderItems.add(item.productId);
+      });
+    });
+
+    // Include remaining seller catalog products so all active seller categories are deterministically represented
+    sellerProducts.forEach((prod) => {
+      const entry = ensureCategoryEntry(prod.categoryId);
+      if (!productsWithOrderItems.has(prod.id) && prod.soldCount > 0) {
+        entry.revenue += prod.price * prod.soldCount;
+        entry.unitsSold += prod.soldCount;
+      }
+    });
+
+    const rows = Array.from(catStats.values()).sort((a, b) => b.revenue - a.revenue);
+    const totalCategoryRevenue = rows.reduce((sum, r) => sum + r.revenue, 0);
+    const totalCategoryUnits = rows.reduce((sum, r) => sum + r.unitsSold, 0);
+
+    return {
+      rows: rows.map((r, index) => ({
+        ...r,
+        rank: index + 1,
+        sharePct:
+          totalCategoryRevenue > 0
+            ? Number(((r.revenue / totalCategoryRevenue) * 100).toFixed(1))
+            : 0,
+      })),
+      totalCategoryRevenue,
+      totalCategoryUnits,
+    };
+  }, [sellerProducts, sellerOrders, categories, activeSeller.id, activeSeller.categories]);
 
   // Navigation Items with Live Badges
   const navItems: {
@@ -239,10 +324,10 @@ export default function SellerCenter() {
       labelEn: 'Inventory & Stock',
       icon: Boxes,
       badge:
-        kpis.lowStockCount + kpis.outOfStockCount > 0
-          ? kpis.lowStockCount + kpis.outOfStockCount
+        kpis.lowStockCount + kpis.criticalStockCount + kpis.outOfStockCount > 0
+          ? kpis.lowStockCount + kpis.criticalStockCount + kpis.outOfStockCount
           : undefined,
-      badgeTone: kpis.outOfStockCount > 0 ? 'red' : 'amber',
+      badgeTone: kpis.outOfStockCount > 0 || kpis.criticalStockCount > 0 ? 'red' : 'amber',
     },
     {
       id: 'orders',
@@ -573,6 +658,7 @@ export default function SellerCenter() {
                 {/* Actionable Operational Alerts Bar */}
                 {(kpis.newPlacedCount > 0 ||
                   kpis.lowStockCount > 0 ||
+                  kpis.criticalStockCount > 0 ||
                   kpis.outOfStockCount > 0 ||
                   kpis.unansweredCount > 0 ||
                   kpis.returnOrdersCount > 0) && (
@@ -615,14 +701,14 @@ export default function SellerCenter() {
                         className="p-3.5 rounded-xl bg-[#FAF8F5] hover:bg-[#FBF7EC] border border-[#E6E0D6] text-start transition-colors"
                       >
                         <div className="text-lg font-bold font-mono text-[#C87D12]">
-                          {kpis.lowStockCount + kpis.outOfStockCount}
+                          {kpis.lowStockCount + kpis.criticalStockCount + kpis.outOfStockCount}
                         </div>
                         <div className="text-xs font-bold text-[#141413] mt-0.5">
-                          {t('تنبيهات انخفاض أو نفاد المخزون', 'Low / Out-of-Stock SKUs')}
+                          {t('تنبيهات المخزون (حرج / منخفض / نافد)', 'Critical / Low / Out-of-Stock SKUs')}
                         </div>
                         <div className="text-[10px] text-[#8C857B] mt-0.5">
-                          {kpis.outOfStockCount} {t('نافد', 'out')} · {kpis.lowStockCount}{' '}
-                          {t('منخفض', 'low')}
+                          {kpis.outOfStockCount} {t('نافد', 'out')} · {kpis.criticalStockCount}{' '}
+                          {t('حرج', 'critical')} · {kpis.lowStockCount} {t('منخفض', 'low')}
                         </div>
                       </button>
 
@@ -778,13 +864,17 @@ export default function SellerCenter() {
                         ★ {kpis.avgProductRating} / 5.0
                       </span>
                     </div>
-                    <div className="text-sm font-bold text-[#141413] pt-1 flex items-center justify-between">
+                    <div className="text-xs font-bold text-[#141413] pt-1 flex items-center justify-between gap-2">
                       <span>
-                        {t('منخفض المخزون:', 'Low Stock:')}{' '}
+                        {t('منخفض:', 'Low:')}{' '}
                         <strong className="font-mono text-[#C87D12]">{kpis.lowStockCount}</strong>
                       </span>
                       <span>
-                        {t('نافد:', 'Out of Stock:')}{' '}
+                        {t('حرج:', 'Critical:')}{' '}
+                        <strong className="font-mono text-[#B45309]">{kpis.criticalStockCount}</strong>
+                      </span>
+                      <span>
+                        {t('نافد:', 'Out:')}{' '}
                         <strong className="font-mono text-[#9E2A2B]">{kpis.outOfStockCount}</strong>
                       </span>
                     </div>
@@ -1149,6 +1239,146 @@ export default function SellerCenter() {
                       })}
                     </div>
                   </div>
+                </div>
+
+                {/* Seller-Scoped Category Analytics (Deterministic from Seller Orders & Catalog) */}
+                <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#F3EFEA] pb-4">
+                    <div>
+                      <span className="px-2.5 py-0.5 rounded-md bg-[#FBF7EC] text-[#B8860B] border border-[#C59B27]/40 text-[11px] font-bold">
+                        {t('تحليلات الأقسام والربحية (Category Intelligence)', 'Category Performance Breakdown')}
+                      </span>
+                      <h3 className="text-base font-bold text-[#141413] mt-1">
+                        {t(
+                          'الإيرادات والوحدات المباعة وحصة المبيعات حسب القسم',
+                          'Revenue by Category, Units Sold & Share of Total Seller Revenue'
+                        )}
+                      </h3>
+                      <p className="text-xs text-[#57534E]">
+                        {t(
+                          'محسوبة بشكل حتمي من بنود طلبات المتجر الفعلية وكتالوج منتجات التاجر مرتبة تنازلياً حسب الإيراد.',
+                          'Deterministically calculated from your store order items and catalog SKUs, sorted descending by revenue.'
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-4 text-xs">
+                      <div className="px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
+                        <span className="text-[#8C857B] block text-[10px]">
+                          {t('إجمالي إيرادات الأقسام', 'Total Category Revenue')}
+                        </span>
+                        <span className="font-mono font-bold text-[#0B4F3F]">
+                          {formatPrice(categoryAnalytics.totalCategoryRevenue)}
+                        </span>
+                      </div>
+                      <div className="px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
+                        <span className="text-[#8C857B] block text-[10px]">
+                          {t('إجمالي الوحدات المباعة', 'Total Category Units')}
+                        </span>
+                        <span className="font-mono font-bold text-[#141413]">
+                          {categoryAnalytics.totalCategoryUnits.toLocaleString()}{' '}
+                          {t('قطعة', 'units')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {categoryAnalytics.rows.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-[#8C857B]">
+                      {t('لا توجد بيانات أقسام مسجلة لهذا المتجر.', 'No category sales data available.')}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                      {/* Ranked Horizontal Visualization (7 Cols) */}
+                      <div className="lg:col-span-7 space-y-3.5">
+                        <div className="text-xs font-bold text-[#57534E]">
+                          {t(
+                            'الترتيب التنازلي للأقسام الأعلى إيراداً (Top Categories Ranked Chart)',
+                            'Ranked Horizontal Revenue Share by Category'
+                          )}
+                        </div>
+                        {categoryAnalytics.rows.map((cat) => (
+                          <div
+                            key={cat.categoryId}
+                            className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-2"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="w-6 h-6 rounded-lg bg-[#0B4F3F] text-[#C59B27] font-mono font-bold text-[11px] flex items-center justify-center">
+                                  #{cat.rank}
+                                </span>
+                                <span className="font-bold text-[#141413]">
+                                  {lang === 'ar' ? cat.nameAr : cat.nameEn}
+                                </span>
+                                <span className="text-[11px] text-[#8C857B]">
+                                  ({lang === 'ar' ? cat.nameEn : cat.nameAr})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3 font-mono">
+                                <span className="text-[11px] text-[#57534E]">
+                                  {cat.unitsSold.toLocaleString()} {t('وحدة مباعة', 'units sold')}
+                                </span>
+                                <span className="font-bold text-[#0B4F3F]">
+                                  {formatPrice(cat.revenue)}
+                                </span>
+                                <span className="px-2 py-0.5 rounded bg-[#EBF3F0] text-[#1E6B47] font-bold text-[11px]">
+                                  {cat.sharePct}%
+                                </span>
+                              </div>
+                            </div>
+                            <div className="w-full h-2.5 rounded-full bg-[#E6E0D6]/70 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-[#0B4F3F] to-[#C59B27]"
+                                style={{ width: `${Math.max(4, cat.sharePct)}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Top Categories Summary Cards & Breakdown Table (5 Cols) */}
+                      <div className="lg:col-span-5 space-y-3">
+                        <div className="text-xs font-bold text-[#57534E]">
+                          {t('جدول تفصيل أداء الأقسام (Top Categories Ledger)', 'Top Categories Performance Table')}
+                        </div>
+                        <div className="rounded-xl border border-[#E6E0D6] overflow-hidden">
+                          <table className="w-full text-xs text-start">
+                            <thead className="bg-[#FAF8F5] text-[#57534E] border-b border-[#E6E0D6]">
+                              <tr>
+                                <th className="py-2.5 px-3 text-start">{t('القسم', 'Category')}</th>
+                                <th className="py-2.5 px-3 text-start">{t('الوحدات', 'Units')}</th>
+                                <th className="py-2.5 px-3 text-start">{t('الإيراد', 'Revenue')}</th>
+                                <th className="py-2.5 px-3 text-end">{t('الحصة', 'Share')}</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#F3EFEA]">
+                              {categoryAnalytics.rows.map((cat) => (
+                                <tr key={cat.categoryId} className="hover:bg-[#FAF8F5]/60">
+                                  <td className="py-2.5 px-3">
+                                    <div className="font-bold text-[#141413]">
+                                      {lang === 'ar' ? cat.nameAr : cat.nameEn}
+                                    </div>
+                                    <div className="text-[10px] text-[#8C857B]">
+                                      {cat.skuCount} {t('منتج', 'SKUs')}
+                                    </div>
+                                  </td>
+                                  <td className="py-2.5 px-3 font-mono font-semibold text-[#141413]">
+                                    {cat.unitsSold.toLocaleString()}
+                                  </td>
+                                  <td className="py-2.5 px-3 font-mono font-bold text-[#0B4F3F]">
+                                    {formatPrice(cat.revenue)}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-end font-mono font-bold text-[#1E6B47]">
+                                    {cat.sharePct}%
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
