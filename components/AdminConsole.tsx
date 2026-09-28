@@ -33,6 +33,9 @@ import { useMarketplace } from '@/context/MarketplaceContext';
 import AdminSellersAndProducts from '@/components/admin/AdminSellersAndProducts';
 import AdminOrdersReturnsCustomers from '@/components/admin/AdminOrdersReturnsCustomers';
 import AdminPromotionsSupportModeration from '@/components/admin/AdminPromotionsSupportModeration';
+import AdminFinanceAndTreasury from '@/components/admin/AdminFinanceAndTreasury';
+import AdminMarketplaceAnalytics from '@/components/admin/AdminMarketplaceAnalytics';
+import AdminAuditLogCenter from '@/components/admin/AdminAuditLogCenter';
 
 export type AdminSectionId =
   | 'overview'
@@ -45,10 +48,10 @@ export type AdminSectionId =
   | 'coupons'
   | 'tickets'
   | 'moderation'
-  | 'finance-preview'
-  | 'analytics-preview'
+  | 'finance'
+  | 'analytics'
+  | 'audit'
   | 'cms-preview'
-  | 'audit-preview'
   | 'settings-preview';
 
 export function AdminConsole() {
@@ -406,6 +409,26 @@ export function AdminConsole() {
         metrics.pendingReviews.length + metrics.unansweredQuestions.length || undefined,
       badgeTone: 'amber',
     },
+    {
+      id: 'finance',
+      labelAr: 'الخزينة والتسويات المالية',
+      labelEn: 'Finance & Treasury',
+      icon: Landmark,
+    },
+    {
+      id: 'analytics',
+      labelAr: 'تحليلات المنصة التنفيذية',
+      labelEn: 'Marketplace Analytics',
+      icon: BarChart3,
+    },
+    {
+      id: 'audit',
+      labelAr: 'سجل التدقيق الرقابي',
+      labelEn: 'Audit Log Center',
+      icon: History,
+      badge: auditLogs.length || undefined,
+      badgeTone: 'emerald',
+    },
   ];
 
   const round3BPlaceholders: {
@@ -414,24 +437,6 @@ export function AdminConsole() {
     labelEn: string;
     icon: React.ComponentType<{ className?: string }>;
   }[] = [
-    {
-      id: 'audit-preview',
-      labelAr: 'سجل التدقيق الرقابي',
-      labelEn: 'Audit Logs',
-      icon: History,
-    },
-    {
-      id: 'finance-preview',
-      labelAr: 'الخزينة والتسويات المالية',
-      labelEn: 'Finance & Treasury',
-      icon: Landmark,
-    },
-    {
-      id: 'analytics-preview',
-      labelAr: 'تحليلات المنصة المتقدمة',
-      labelEn: 'Marketplace Analytics',
-      icon: BarChart3,
-    },
     {
       id: 'cms-preview',
       labelAr: 'إدارة الواجهة التسويقية (CMS)',
@@ -547,6 +552,26 @@ export function AdminConsole() {
                 </button>
               );
             })}
+            {round3BPlaceholders.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveSection(item.id)}
+                  className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    isActive
+                      ? 'bg-[#141413] text-[#F5E6C8]'
+                      : 'bg-white text-[#8C857B] border border-[#E6E0D6]'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? item.labelAr : item.labelEn}</span>
+                  <span className="text-[10px] font-mono">3B.2</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -599,14 +624,14 @@ export function AdminConsole() {
               })}
             </div>
 
-            {/* Governance & Future Round 3B Modules */}
+            {/* Governance & Future Round 3B.2 Modules */}
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-3.5 shadow-xs space-y-1">
               <div className="px-3 py-2 flex items-center justify-between">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[#8C857B]">
-                  {t('الحوكمة والخزينة والواجهة', 'Governance & Platform (3B)')}
+                  {t('الواجهة وإعدادات النظام (3B.2)', 'CMS & Platform Config (3B.2)')}
                 </span>
                 <span className="px-1.5 py-0.5 rounded bg-[#FAF8F5] border border-[#E6E0D6] text-[10px] font-mono text-[#8C857B]">
-                  3B
+                  3B.2
                 </span>
               </div>
               {round3BPlaceholders.map((item) => {
@@ -629,13 +654,7 @@ export function AdminConsole() {
                         {lang === 'ar' ? item.labelAr : item.labelEn}
                       </span>
                     </div>
-                    {item.id === 'audit-preview' ? (
-                      <span className="px-1.5 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] text-[10px] font-mono font-bold">
-                        {auditLogs.length}
-                      </span>
-                    ) : (
-                      <span className="text-[10px] font-mono text-[#8C857B]">3B</span>
-                    )}
+                    <span className="text-[10px] font-mono text-[#8C857B]">3B.2</span>
                   </button>
                 );
               })}
@@ -959,7 +978,7 @@ export function AdminConsole() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => setActiveSection('audit-preview')}
+                        onClick={() => setActiveSection('audit')}
                         className="text-xs font-bold text-[#0B4F3F] hover:underline"
                       >
                         {t('السجل الكامل', 'Full Log')}
@@ -1162,80 +1181,49 @@ export function AdminConsole() {
             )}
 
             {/* ==================================================
-                AUDIT LOGS & ROUND 3B PLACEHOLDERS
+                SECTION 11: EXECUTIVE FINANCE & TREASURY
             ================================================== */}
-            {activeSection === 'audit-preview' && (
-              <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 shadow-xs space-y-5">
-                <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E6E0D6] pb-4">
-                  <div>
-                    <span className="text-xs font-mono font-bold uppercase text-[#0B4F3F]">
-                      IMMUTABLE GOVERNANCE STREAM
-                    </span>
-                    <h2 className="text-lg font-bold text-[#141413] mt-0.5">
-                      {t('سجل التدقيق الرقابي للعمليات الإدارية', 'Administrative Operations Audit Log')}
-                    </h2>
-                  </div>
-                  <span className="px-3 py-1 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-mono font-bold">
-                    {auditLogs.length} {t('عملية موثقة', 'recorded events')}
-                  </span>
-                </div>
+            {activeSection === 'finance' && <AdminFinanceAndTreasury />}
 
-                <div className="divide-y divide-[#E6E0D6]">
-                  {auditLogs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="py-3.5 flex flex-wrap items-center justify-between gap-4 text-xs"
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="px-2 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] text-[10px] font-mono font-bold uppercase">
-                            {log.targetType}
-                          </span>
-                          <span className="font-bold text-[#141413]">
-                            {lang === 'ar' ? log.actionAr : log.actionEn}
-                          </span>
-                        </div>
-                        <p className="text-[#57534E]">
-                          {log.targetType}: #{log.targetId}
-                        </p>
-                      </div>
-                      <div className="text-end font-mono text-[11px] text-[#8C857B]">
-                        <div className="font-bold text-[#141413]">{log.actorName}</div>
-                        <div>{log.createdAt.slice(0, 19).replace('T', ' ')}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* ==================================================
+                SECTION 12: MARKETPLACE ANALYTICS & INTELLIGENCE
+            ================================================== */}
+            {activeSection === 'analytics' && <AdminMarketplaceAnalytics />}
 
-            {(activeSection === 'finance-preview' ||
-              activeSection === 'analytics-preview' ||
-              activeSection === 'cms-preview' ||
-              activeSection === 'settings-preview') && (
+            {/* ==================================================
+                SECTION 13: ADMINISTRATIVE AUDIT LOG CENTER
+            ================================================== */}
+            {activeSection === 'audit' && <AdminAuditLogCenter />}
+
+            {/* ==================================================
+                ROUND 3B.2 PLACEHOLDERS (HOMEPAGE CMS & PLATFORM SETTINGS)
+            ================================================== */}
+            {(activeSection === 'cms-preview' || activeSection === 'settings-preview') && (
               <div className="bg-white rounded-2xl border border-[#E6E0D6] p-8 shadow-xs space-y-4">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-[#FBF7EC] border border-[#C59B27]/40 text-xs font-bold text-[#141413]">
                   <Sparkles className="w-4 h-4 text-[#C59B27]" />
                   <span>
                     {t(
-                      'مجدول للمرحلة القادمة (ROUND 3B)',
-                      'Scheduled for Next Phase (ROUND 3B)'
+                      'مجدول للمرحلة القادمة (ROUND 3B.2)',
+                      'Scheduled for Next Phase (ROUND 3B.2)'
                     )}
                   </span>
                 </div>
                 <h2 className="text-xl font-bold text-[#141413]">
-                  {activeSection === 'finance-preview'
-                    ? t('الخزينة والتسويات المالية للتجار', 'Platform Treasury & Merchant Settlements')
-                    : activeSection === 'analytics-preview'
-                    ? t('تحليلات السوق التنفيذية المتقدمة', 'Executive Marketplace Intelligence')
-                    : activeSection === 'cms-preview'
-                    ? t('نظام إدارة المحتوى والواجهة التسويقية (CMS)', 'Storefront Homepage CMS')
-                    : t('إعدادات المنصة والسياسات الضريبية', 'Platform Configuration & Tax Governance')}
+                  {activeSection === 'cms-preview'
+                    ? t(
+                        'نظام إدارة المحتوى والواجهة التسويقية (CMS)',
+                        'Storefront Homepage CMS'
+                      )
+                    : t(
+                        'إعدادات المنصة والسياسات الضريبية',
+                        'Platform Configuration & Tax Governance'
+                      )}
                 </h2>
                 <p className="text-xs text-[#57534E] leading-relaxed max-w-2xl">
                   {t(
-                    'تم تخصيص هذه المرحلة (ROUND 3A) لإنجاز كافة العمليات التشغيلية والرقابية الأساسية للمنصة (التجار، الكتالوج، الطلبات، المرتجعات، العملاء، الكوبونات، التذاكر، والمراجعات). سيتم تفعيل هذه الوحدة المتقدمة في المرحلة ROUND 3B.',
-                    'ROUND 3A is dedicated to Core Marketplace Operations (Sellers, Products Moderation, Orders, Returns & Refunds, Customers, Coupons, Support Tickets, Reviews & Q&A, and Unified Operations Queue). This module is reserved for ROUND 3B.'
+                    'هذه الوحدة مخصصة للمرحلة (ROUND 3B.2) لإدارة محتوى الصفحة الرئيسية والبانرات الترويجية وإعدادات السياسات العامة للمنصة.',
+                    'This module is reserved for ROUND 3B.2 to manage Storefront Homepage CMS banners, editorial collections, and platform-wide governance settings.'
                   )}
                 </p>
                 <div className="pt-2">

@@ -11,19 +11,18 @@ import {
   Activity,
   Download,
   Calendar,
-  CheckCircle2,
-  AlertTriangle,
-  Sparkles,
-  RotateCcw,
   Star,
   CreditCard,
-  Users,
-  ShoppingBag,
   ShieldCheck,
   Search,
+  AlertTriangle,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
-import { calculateSellerPayoutReservation } from '@/lib/types';
+import {
+  OrderStatus,
+  PaymentMethodType,
+  calculateSellerPayoutReservation,
+} from '@/lib/types';
 import {
   safeNumber,
   safeDivide,
@@ -39,6 +38,21 @@ type AnalyticsTabId =
   | 'catalog'
   | 'customers_geo'
   | 'operations_sla';
+
+const PAYMENT_METHOD_LABELS: Record<
+  PaymentMethodType,
+  { ar: string; en: string }
+> = {
+  mada: { ar: 'مدى (Mada)', en: 'Mada Debit' },
+  apple_pay: { ar: 'أبل باي (Apple Pay)', en: 'Apple Pay' },
+  visa_mastercard: {
+    ar: 'فيزا / ماستركارد (Visa / Mastercard)',
+    en: 'Visa / Mastercard',
+  },
+  stc_pay: { ar: 'إس تي سي باي (STC Pay)', en: 'STC Pay' },
+  wallet: { ar: 'محفظة أثيل (Atheel Wallet)', en: 'Atheel Wallet' },
+  cod: { ar: 'الدفع عند الاستلام (COD)', en: 'Cash on Delivery (COD)' },
+};
 
 export default function AdminMarketplaceAnalytics() {
   const {
@@ -70,19 +84,40 @@ export default function AdminMarketplaceAnalytics() {
     return Math.max(...timestamps, fallback);
   }, [orders]);
 
-  // Available cities across orders & sellers
+  // Available cities derived deterministically from order.address and seller cities
   const availableCities = useMemo(() => {
-    const set = new Set<string>();
+    const cityMap = new Map<string, { cityAr: string; cityEn: string }>();
     orders.forEach((o) => {
-      if (o.shippingAddress?.city) set.add(o.shippingAddress.city);
+      if (o.address?.cityAr) {
+        cityMap.set(o.address.cityAr, {
+          cityAr: o.address.cityAr,
+          cityEn: o.address.cityEn || o.address.cityAr,
+        });
+      }
     });
     sellers.forEach((s) => {
-      if (s.cityAr) set.add(s.cityAr);
+      if (s.cityAr && !cityMap.has(s.cityAr)) {
+        cityMap.set(s.cityAr, {
+          cityAr: s.cityAr,
+          cityEn: s.cityEn || s.cityAr,
+        });
+      }
     });
-    return Array.from(set);
+    return Array.from(cityMap.values());
   }, [orders, sellers]);
 
-  // Filtered orders by selected date range & city filter
+  // Fast O(1) lookup maps for products & sellers
+  const productById = useMemo(() => {
+    const map = new Map(products.map((p) => [p.id, p]));
+    return map;
+  }, [products]);
+
+  const sellerById = useMemo(() => {
+    const map = new Map(sellers.map((s) => [s.id, s]));
+    return map;
+  }, [sellers]);
+
+  // Filtered orders by selected date range & cityAr filter
   const filteredOrders = useMemo(() => {
     const dayMs = 24 * 60 * 60 * 1000;
     const windowMs =
@@ -98,8 +133,7 @@ export default function AdminMarketplaceAnalytics() {
 
     return orders.filter((order) => {
       if (selectedCityFilter !== 'all') {
-        const orderCity = order.shippingAddress?.city || '';
-        if (orderCity !== selectedCityFilter) return false;
+        if (order.address.cityAr !== selectedCityFilter) return false;
       }
       if (windowMs === Infinity) return true;
       const orderTs = new Date(order.createdAt.replace(' ', 'T')).getTime();
@@ -109,18 +143,20 @@ export default function AdminMarketplaceAnalytics() {
   }, [orders, dateRange, selectedCityFilter, referenceTimestamp]);
 
   // ============================================================================
-  // 1. GMV & REVENUE INTELLIGENCE METRICS
+  // 1. GMV, REVENUE & ORDER STATUS INTELLIGENCE
   // ============================================================================
   const gmvRevenueStats = useMemo(() => {
     let grossGmv = 0;
     let cancelledGmv = 0;
-    let refundedAmount = 0;
-    let netGmv = 0;
-    let estimatedCommissionRevenue = 0;
-    let paidOrdersCount = 0;
-    let pendingOrdersCount = 0;
+    let refundSettledOrPendingAmount = 0;
+    let netRealizedGmv = 0;
+    let orderDerivedCommission = 0;
+
+    let nonCancelledOrdersCount = 0;
+    let deliveredOrdersCount = 0;
+    let inFulfillmentOrdersCount = 0;
     let cancelledOrdersCount = 0;
-    let refundedOrdersCount = 0;
+    let returnedOrRequestedOrdersCount = 0;
     let totalUnitsSold = 0;
 
     filteredOrders.forEach((order) => {
@@ -131,44 +167,60 @@ export default function AdminMarketplaceAnalytics() {
         (sum, item) => sum + safeNumber(item.quantity, 1),
         0
       );
-      totalUnitsSold += unitsInOrder;
 
-      // Calculate commission from items based on seller commissionRate
+      // Calculate commission deterministically from OrderItem.unitPrice * OrderItem.quantity
       const orderCommission = order.items.reduce((sum, item) => {
-        const lineTotal =
-          safeNumber(item.product?.price) * safeNumber(item.quantity, 1);
-        const sellerObj = sellers.find((s) => s.id === item.product?.sellerId);
+        const lineRevenue =
+          safeNumber(item.unitPrice) * safeNumber(item.quantity, 1);
+        const sellerObj = sellerById.get(item.sellerId);
         const rate = safeNumber(sellerObj?.commissionRate, 12);
-        return sum + (lineTotal * rate) / 100;
+        return sum + (lineRevenue * rate) / 100;
       }, 0);
 
       const isCancelled = order.status === 'cancelled';
-      const isRefunded =
-        order.paymentStatus === 'refunded' ||
-        order.returnRequest?.status === 'refunded' ||
-        order.returnRequest?.refundStatus === 'wallet_completed' ||
-        order.returnRequest?.refundStatus === 'external_authorized_pending';
+      const hasReturnActivity =
+        order.status === 'return_requested' ||
+        order.status === 'returned' ||
+        Boolean(order.returnRequest);
+
+      const isInFulfillment =
+        order.status === 'placed' ||
+        order.status === 'confirmed' ||
+        order.status === 'preparing' ||
+        order.status === 'shipped' ||
+        order.status === 'out_for_delivery';
 
       if (isCancelled) {
         cancelledOrdersCount += 1;
         cancelledGmv += total;
-      } else if (isRefunded) {
-        refundedOrdersCount += 1;
-        const refAmt = safeNumber(order.returnRequest?.refundAmount, total);
-        refundedAmount += refAmt;
-        netGmv += Math.max(0, total - refAmt);
       } else {
-        netGmv += total;
-        estimatedCommissionRevenue += orderCommission;
-        if (order.paymentStatus === 'paid') {
-          paidOrdersCount += 1;
-        } else {
-          pendingOrdersCount += 1;
+        nonCancelledOrdersCount += 1;
+        totalUnitsSold += unitsInOrder;
+
+        if (order.status === 'delivered') {
+          deliveredOrdersCount += 1;
+        } else if (isInFulfillment) {
+          inFulfillmentOrdersCount += 1;
         }
+
+        if (hasReturnActivity) {
+          returnedOrRequestedOrdersCount += 1;
+        }
+
+        const refundState = order.returnRequest?.refundStatus ?? 'none';
+        const isRefundActive =
+          refundState === 'wallet_completed' ||
+          refundState === 'external_authorized_pending';
+        const refAmt = isRefundActive
+          ? safeNumber(order.returnRequest?.refundAmount, total)
+          : 0;
+
+        refundSettledOrPendingAmount += refAmt;
+        netRealizedGmv += Math.max(0, total - refAmt);
+        orderDerivedCommission += orderCommission;
       }
     });
 
-    // If looking at All Time with no city filter, also surface ledger-verified commission
     const ledgerCommissionTotal = sellers.reduce(
       (sum, s) => sum + safeNumber(s.platformCommission),
       0
@@ -181,38 +233,47 @@ export default function AdminMarketplaceAnalytics() {
     const effectiveCommissionRevenue =
       dateRange === 'all' && selectedCityFilter === 'all' && ledgerCommissionTotal > 0
         ? ledgerCommissionTotal
-        : Math.round(estimatedCommissionRevenue * 100) / 100;
+        : Number(orderDerivedCommission.toFixed(2));
 
-    const aov = safeDivide(grossGmv, filteredOrders.length);
-    const netVat = extractIncludedVat(netGmv);
+    const aov = safeDivide(netRealizedGmv, nonCancelledOrdersCount);
+    const netVat = extractIncludedVat(netRealizedGmv);
 
-    // Group orders by month/period for visual trend bars
+    // Group orders by month (YYYY-MM) for period trajectory
     const periodMap = new Map<
       string,
-      { period: string; grossGmv: number; netGmv: number; ordersCount: number }
+      {
+        period: string;
+        grossGmv: number;
+        netGmv: number;
+        ordersCount: number;
+        nonCancelledCount: number;
+      }
     >();
 
     filteredOrders.forEach((o) => {
-      const periodKey = o.createdAt.slice(0, 7); // YYYY-MM
+      const periodKey = o.createdAt.slice(0, 7);
       const curr = periodMap.get(periodKey) || {
         period: periodKey,
         grossGmv: 0,
         netGmv: 0,
         ordersCount: 0,
+        nonCancelledCount: 0,
       };
       const total = safeNumber(o.total);
       const isCancelled = o.status === 'cancelled';
-      const isRef =
-        o.paymentStatus === 'refunded' || o.returnRequest?.status === 'refunded';
-      const refAmt = isRef
-        ? safeNumber(o.returnRequest?.refundAmount, total)
-        : 0;
+      const refundState = o.returnRequest?.refundStatus ?? 'none';
+      const refAmt =
+        refundState === 'wallet_completed' ||
+        refundState === 'external_authorized_pending'
+          ? safeNumber(o.returnRequest?.refundAmount, total)
+          : 0;
 
       curr.grossGmv += total;
+      curr.ordersCount += 1;
       if (!isCancelled) {
+        curr.nonCancelledCount += 1;
         curr.netGmv += Math.max(0, total - refAmt);
       }
-      curr.ordersCount += 1;
       periodMap.set(periodKey, curr);
     });
 
@@ -223,26 +284,27 @@ export default function AdminMarketplaceAnalytics() {
     return {
       grossGmv,
       cancelledGmv,
-      refundedAmount,
-      netGmv,
+      refundSettledOrPendingAmount,
+      netRealizedGmv,
       effectiveCommissionRevenue,
-      estimatedCommissionRevenue,
+      orderDerivedCommission: Number(orderDerivedCommission.toFixed(2)),
       ledgerCommissionTotal,
       ledgerGrossSalesTotal,
       aov,
       netVat,
       ordersCount: filteredOrders.length,
-      paidOrdersCount,
-      pendingOrdersCount,
+      nonCancelledOrdersCount,
+      deliveredOrdersCount,
+      inFulfillmentOrdersCount,
       cancelledOrdersCount,
-      refundedOrdersCount,
+      returnedOrRequestedOrdersCount,
       totalUnitsSold,
       periodSeries,
     };
-  }, [filteredOrders, sellers, dateRange, selectedCityFilter]);
+  }, [filteredOrders, sellers, sellerById, dateRange, selectedCityFilter]);
 
   // ============================================================================
-  // 2. CATEGORY PERFORMANCE METRICS
+  // 2. CATEGORY PERFORMANCE METRICS (JOINING OrderItem.productId -> Product)
   // ============================================================================
   const categoryStats = useMemo(() => {
     const totalOrderItemGmv = filteredOrders.reduce((sum, order) => {
@@ -251,8 +313,7 @@ export default function AdminMarketplaceAnalytics() {
         sum +
         order.items.reduce(
           (lSum, item) =>
-            lSum +
-            safeNumber(item.product?.price) * safeNumber(item.quantity, 1),
+            lSum + safeNumber(item.unitPrice) * safeNumber(item.quantity, 1),
           0
         )
       );
@@ -262,32 +323,35 @@ export default function AdminMarketplaceAnalytics() {
       .map((cat) => {
         const catProducts = products.filter((p) => p.categoryId === cat.id);
         const activeProductsCount = catProducts.filter(
-          (p) => (p.status ?? 'active') === 'active'
+          (p) => p.status === 'active'
         ).length;
 
         let unitsSold = 0;
         let categoryGmv = 0;
         let orderAppearances = 0;
-        let returnedAppearances = 0;
+        let returnAppearances = 0;
 
         filteredOrders.forEach((order) => {
-          const matchingItems = order.items.filter(
-            (i) => i.product?.categoryId === cat.id
-          );
+          const matchingItems = order.items.filter((item) => {
+            const product = productById.get(item.productId);
+            return product?.categoryId === cat.id;
+          });
+
           if (matchingItems.length > 0) {
             orderAppearances += 1;
             if (
+              order.status === 'return_requested' ||
               order.status === 'returned' ||
-              Boolean(order.returnRequest) ||
-              order.paymentStatus === 'refunded'
+              Boolean(order.returnRequest)
             ) {
-              returnedAppearances += 1;
+              returnAppearances += 1;
             }
             if (order.status !== 'cancelled') {
               matchingItems.forEach((item) => {
                 const qty = safeNumber(item.quantity, 1);
+                const lineRevenue = safeNumber(item.unitPrice) * qty;
                 unitsSold += qty;
-                categoryGmv += safeNumber(item.product?.price) * qty;
+                categoryGmv += lineRevenue;
               });
             }
           }
@@ -296,7 +360,7 @@ export default function AdminMarketplaceAnalytics() {
         const gmvSharePercent =
           safeDivide(categoryGmv, totalOrderItemGmv) * 100;
         const returnRatePercent =
-          safeDivide(returnedAppearances, orderAppearances) * 100;
+          safeDivide(returnAppearances, orderAppearances) * 100;
         const avgRating =
           catProducts.length > 0
             ? safeDivide(
@@ -319,17 +383,17 @@ export default function AdminMarketplaceAnalytics() {
         };
       })
       .sort((a, b) => b.categoryGmv - a.categoryGmv);
-  }, [categories, products, filteredOrders]);
+  }, [categories, products, productById, filteredOrders]);
 
   // ============================================================================
-  // 3. SELLER PERFORMANCE METRICS
+  // 3. SELLER PERFORMANCE METRICS (USING OrderItem.sellerId & unitPrice * quantity)
   // ============================================================================
   const sellerPerformanceRows = useMemo(() => {
     return sellers
       .map((seller) => {
         const sellerProducts = products.filter((p) => p.sellerId === seller.id);
         const activeProducts = sellerProducts.filter(
-          (p) => (p.status ?? 'active') === 'active'
+          (p) => p.status === 'active'
         ).length;
 
         let rangeOrdersCount = 0;
@@ -339,22 +403,23 @@ export default function AdminMarketplaceAnalytics() {
 
         filteredOrders.forEach((order) => {
           const sellerItems = order.items.filter(
-            (i) => i.product?.sellerId === seller.id
+            (item) => item.sellerId === seller.id
           );
           if (sellerItems.length > 0) {
             rangeOrdersCount += 1;
             if (
+              order.status === 'return_requested' ||
               order.status === 'returned' ||
-              Boolean(order.returnRequest) ||
-              order.paymentStatus === 'refunded'
+              Boolean(order.returnRequest)
             ) {
               rangeReturnOrdersCount += 1;
             }
             if (order.status !== 'cancelled') {
               sellerItems.forEach((item) => {
                 const qty = safeNumber(item.quantity, 1);
+                const lineRevenue = safeNumber(item.unitPrice) * qty;
                 rangeUnitsSold += qty;
-                rangeOrderGmv += safeNumber(item.product?.price) * qty;
+                rangeOrderGmv += lineRevenue;
               });
             }
           }
@@ -368,7 +433,7 @@ export default function AdminMarketplaceAnalytics() {
         const effectiveCommission =
           dateRange === 'all' && selectedCityFilter === 'all'
             ? safeNumber(seller.platformCommission)
-            : Math.round(((effectiveGmv * rate) / 100) * 100) / 100;
+            : Number(((effectiveGmv * rate) / 100).toFixed(2));
         const effectiveRefunds =
           dateRange === 'all' && selectedCityFilter === 'all'
             ? safeNumber(seller.refundsTotal)
@@ -404,49 +469,62 @@ export default function AdminMarketplaceAnalytics() {
         );
       })
       .sort((a, b) => b.effectiveGmv - a.effectiveGmv);
-  }, [sellers, products, filteredOrders, tickets, dateRange, selectedCityFilter, searchTerm]);
+  }, [
+    sellers,
+    products,
+    filteredOrders,
+    tickets,
+    dateRange,
+    selectedCityFilter,
+    searchTerm,
+  ]);
 
   // ============================================================================
-  // 4. PRODUCT & CATALOG INTELLIGENCE
+  // 4. PRODUCT & CATALOG INTELLIGENCE (REAL ProductStatus & OrderItem JOIN)
   // ============================================================================
   const catalogIntelligence = useMemo(() => {
     const productStats = products.map((product) => {
       let unitsSold = 0;
       let revenue = 0;
       let orderCount = 0;
-      let returnCount = 0;
+      let returnOrderCount = 0;
 
       filteredOrders.forEach((order) => {
-        const line = order.items.find((i) => i.product?.id === product.id);
-        if (line) {
+        const matchingLines = order.items.filter(
+          (item) => item.productId === product.id
+        );
+        if (matchingLines.length > 0) {
           orderCount += 1;
           if (
+            order.status === 'return_requested' ||
             order.status === 'returned' ||
-            Boolean(order.returnRequest) ||
-            order.paymentStatus === 'refunded'
+            Boolean(order.returnRequest)
           ) {
-            returnCount += 1;
+            returnOrderCount += 1;
           }
           if (order.status !== 'cancelled') {
-            const qty = safeNumber(line.quantity, 1);
-            unitsSold += qty;
-            revenue += safeNumber(line.product?.price, product.price) * qty;
+            matchingLines.forEach((line) => {
+              const qty = safeNumber(line.quantity, 1);
+              unitsSold += qty;
+              revenue += safeNumber(line.unitPrice) * qty;
+            });
           }
         }
       });
 
-      const returnRatePercent = safeDivide(returnCount, orderCount) * 100;
-      const seller = sellers.find((s) => s.id === product.sellerId);
+      const seller = sellerById.get(product.sellerId);
+      const category = categories.find((c) => c.id === product.categoryId);
 
       return {
         product,
-        sellerNameAr: seller?.nameAr || product.sellerId,
-        sellerNameEn: seller?.nameEn || product.sellerId,
+        sellerNameAr: seller?.nameAr || product.sellerNameAr,
+        sellerNameEn: seller?.nameEn || product.sellerNameEn,
+        categoryNameAr: category?.nameAr || product.categoryId,
+        categoryNameEn: category?.nameEn || product.categoryId,
         unitsSold,
         revenue,
         orderCount,
-        returnCount,
-        returnRatePercent,
+        returnOrderCount,
       };
     });
 
@@ -455,59 +533,94 @@ export default function AdminMarketplaceAnalytics() {
       .slice(0, 8);
 
     const topByUnits = [...productStats]
-      .sort((a, b) => b.unitsSold - a.unitsSold)
+      .sort(
+        (a, b) =>
+          b.unitsSold - a.unitsSold ||
+          safeNumber(b.product.soldCount) - safeNumber(a.product.soldCount)
+      )
       .slice(0, 8);
 
-    const lowStockProducts = products
-      .filter((p) => safeNumber(p.stock) <= 5)
-      .sort((a, b) => safeNumber(a.stock) - safeNumber(b.stock));
+    // Low Stock High Demand: positive stock <= lowStockThreshold (or 5), sorted by demand
+    const lowStockHighDemand = [...productStats]
+      .filter(
+        (stat) =>
+          safeNumber(stat.product.stock) > 0 &&
+          safeNumber(stat.product.stock) <=
+            safeNumber(stat.product.lowStockThreshold, 5)
+      )
+      .sort(
+        (a, b) =>
+          b.unitsSold +
+          safeNumber(b.product.soldCount) -
+          (a.unitsSold + safeNumber(a.product.soldCount))
+      );
 
-    const highReturnProducts = [...productStats]
-      .filter((p) => p.returnCount > 0)
-      .sort((a, b) => b.returnRatePercent - a.returnRatePercent);
+    // Out-of-Stock Revenue Risk: status === 'out_of_stock' or stock <= 0
+    const outOfStockRisk = [...productStats]
+      .filter(
+        (stat) =>
+          stat.product.status === 'out_of_stock' ||
+          safeNumber(stat.product.stock) <= 0
+      )
+      .sort(
+        (a, b) =>
+          safeNumber(b.product.price) * safeNumber(b.product.soldCount, 1) -
+          safeNumber(a.product.price) * safeNumber(a.product.soldCount, 1)
+      );
 
+    // Objective ProductStatus breakdown ('active' | 'draft' | 'out_of_stock' | 'suspended')
     const statusBreakdown = {
-      active: products.filter((p) => (p.status ?? 'active') === 'active').length,
-      pending_review: products.filter((p) => p.status === 'pending_review').length,
-      paused: products.filter((p) => p.status === 'paused').length,
-      rejected: products.filter((p) => p.status === 'rejected').length,
+      active: products.filter((p) => p.status === 'active').length,
+      draft: products.filter((p) => p.status === 'draft').length,
+      out_of_stock: products.filter(
+        (p) => p.status === 'out_of_stock' || safeNumber(p.stock) <= 0
+      ).length,
+      suspended: products.filter((p) => p.status === 'suspended').length,
     };
 
     return {
       topByRevenue,
       topByUnits,
-      lowStockProducts,
-      highReturnProducts,
+      lowStockHighDemand,
+      outOfStockRisk,
       statusBreakdown,
     };
-  }, [products, filteredOrders, sellers]);
+  }, [products, filteredOrders, sellerById, categories]);
 
   // ============================================================================
-  // 5. CUSTOMER & GEOGRAPHIC INSIGHTS
+  // 5. CUSTOMER & GEOGRAPHIC INSIGHTS (order.customerId & order.address.cityAr/En)
   // ============================================================================
   const customerGeoInsights = useMemo(() => {
-    // City aggregation
     const cityMap = new Map<
       string,
-      { city: string; ordersCount: number; gmv: number; customersSet: Set<string> }
+      {
+        cityAr: string;
+        cityEn: string;
+        ordersCount: number;
+        gmv: number;
+        customersSet: Set<string>;
+      }
     >();
 
-    // Payment method aggregation
     const paymentMap = new Map<
-      string,
-      { method: string; ordersCount: number; gmv: number }
+      PaymentMethodType,
+      { method: PaymentMethodType; ordersCount: number; gmv: number }
     >();
 
-    // Customer frequency aggregation
-    const customerOrderCount = new Map<string, { count: number; spend: number }>();
+    const customerOrderCount = new Map<
+      string,
+      { count: number; spend: number }
+    >();
 
     filteredOrders.forEach((order) => {
-      const city = order.shippingAddress?.city || t('غير محدد', 'Unspecified');
+      const cityAr = order.address.cityAr || 'غير محدد';
+      const cityEn = order.address.cityEn || cityAr;
       const total = safeNumber(order.total);
-      const custKey = order.userId || order.customerEmail || order.id;
+      const custKey = order.customerId;
 
-      const cEntry = cityMap.get(city) || {
-        city,
+      const cEntry = cityMap.get(cityAr) || {
+        cityAr,
+        cityEn,
         ordersCount: 0,
         gmv: 0,
         customersSet: new Set<string>(),
@@ -517,9 +630,9 @@ export default function AdminMarketplaceAnalytics() {
         cEntry.gmv += total;
       }
       cEntry.customersSet.add(custKey);
-      cityMap.set(city, cEntry);
+      cityMap.set(cityAr, cEntry);
 
-      const method = order.paymentMethod || 'Madfu / Card';
+      const method = order.paymentMethod;
       const pEntry = paymentMap.get(method) || {
         method,
         ordersCount: 0,
@@ -546,7 +659,8 @@ export default function AdminMarketplaceAnalytics() {
 
     const cityRows = Array.from(cityMap.values())
       .map((c) => ({
-        city: c.city,
+        cityAr: c.cityAr,
+        cityEn: c.cityEn,
         ordersCount: c.ordersCount,
         uniqueCustomers: c.customersSet.size,
         gmv: c.gmv,
@@ -563,7 +677,9 @@ export default function AdminMarketplaceAnalytics() {
       .sort((a, b) => b.gmv - a.gmv);
 
     const customerEntries = Array.from(customerOrderCount.values());
-    const repeatCustomersCount = customerEntries.filter((c) => c.count > 1).length;
+    const repeatCustomersCount = customerEntries.filter(
+      (c) => c.count > 1
+    ).length;
     const singleOrderCustomersCount = customerEntries.filter(
       (c) => c.count === 1
     ).length;
@@ -591,18 +707,24 @@ export default function AdminMarketplaceAnalytics() {
       totalRegisteredCustomers: customerUsers.length,
       totalCustomerWalletLiability,
     };
-  }, [filteredOrders, users, t]);
+  }, [filteredOrders, users]);
 
   // ============================================================================
-  // 6. OPERATIONS & SLA HEALTH
+  // 6. OPERATIONS, FUNNEL & MARKETPLACE HEALTH (REAL STATES ONLY)
   // ============================================================================
   const operationsHealth = useMemo(() => {
-    const statusFunnel = {
-      pending: filteredOrders.filter((o) => o.status === 'pending').length,
+    const statusFunnel: Record<OrderStatus, number> = {
+      placed: filteredOrders.filter((o) => o.status === 'placed').length,
       confirmed: filteredOrders.filter((o) => o.status === 'confirmed').length,
-      processing: filteredOrders.filter((o) => o.status === 'processing').length,
+      preparing: filteredOrders.filter((o) => o.status === 'preparing').length,
       shipped: filteredOrders.filter((o) => o.status === 'shipped').length,
+      out_for_delivery: filteredOrders.filter(
+        (o) => o.status === 'out_for_delivery'
+      ).length,
       delivered: filteredOrders.filter((o) => o.status === 'delivered').length,
+      return_requested: filteredOrders.filter(
+        (o) => o.status === 'return_requested'
+      ).length,
       returned: filteredOrders.filter((o) => o.status === 'returned').length,
       cancelled: filteredOrders.filter((o) => o.status === 'cancelled').length,
     };
@@ -612,20 +734,38 @@ export default function AdminMarketplaceAnalytics() {
     const cancellationRate =
       safeDivide(statusFunnel.cancelled, filteredOrders.length) * 100;
 
+    // ReturnRequest resolution uses status === 'approved' || status === 'rejected'
     const ordersWithReturnReq = filteredOrders.filter((o) =>
       Boolean(o.returnRequest)
     );
     const resolvedReturnsCount = ordersWithReturnReq.filter(
       (o) =>
-        o.returnRequest?.status === 'refunded' ||
+        o.returnRequest?.status === 'approved' ||
         o.returnRequest?.status === 'rejected'
     ).length;
     const returnResolutionRate =
       safeDivide(resolvedReturnsCount, ordersWithReturnReq.length) * 100;
 
+    // Financial refund exposure breakdown across filtered orders
+    const refundStateCounts = {
+      wallet_completed: ordersWithReturnReq.filter(
+        (o) => o.returnRequest?.refundStatus === 'wallet_completed'
+      ).length,
+      external_authorized_pending: ordersWithReturnReq.filter(
+        (o) => o.returnRequest?.refundStatus === 'external_authorized_pending'
+      ).length,
+      failed: ordersWithReturnReq.filter(
+        (o) => o.returnRequest?.refundStatus === 'failed'
+      ).length,
+      none: ordersWithReturnReq.filter(
+        (o) => (o.returnRequest?.refundStatus ?? 'none') === 'none'
+      ).length,
+    };
+
     // Tickets & Treasury
     const payoutTickets = tickets.filter(
-      (tkt) => tkt.workflowType === 'payout' || safeNumber(tkt.payoutAmount) > 0
+      (tkt) =>
+        tkt.workflowType === 'payout' || safeNumber(tkt.payoutAmount) > 0
     );
     const generalSupportTickets = tickets.filter(
       (tkt) => tkt.workflowType !== 'payout' && !tkt.payoutAmount
@@ -633,36 +773,57 @@ export default function AdminMarketplaceAnalytics() {
     const resolvedSupportCount = generalSupportTickets.filter(
       (tkt) => tkt.status === 'resolved'
     ).length;
+    const openSupportTicketsCount = generalSupportTickets.filter(
+      (tkt) => tkt.status === 'open' || tkt.status === 'in_progress'
+    ).length;
     const supportResolutionRate =
       safeDivide(resolvedSupportCount, generalSupportTickets.length) * 100;
 
-    const treasuryQueueBreakdown = {
-      requested: payoutTickets.filter(
-        (tkt) => (tkt.treasuryStatus || 'requested') === 'requested'
-      ).length,
-      under_review: payoutTickets.filter(
-        (tkt) => tkt.treasuryStatus === 'under_review'
-      ).length,
-      approved_for_treasury: payoutTickets.filter(
-        (tkt) => tkt.treasuryStatus === 'approved_for_treasury'
-      ).length,
-      completed: payoutTickets.filter(
-        (tkt) => tkt.treasuryStatus === 'completed'
-      ).length,
-      rejected: payoutTickets.filter(
-        (tkt) => tkt.treasuryStatus === 'rejected'
-      ).length,
-    };
+    const pendingTreasuryRequestsCount = payoutTickets.filter((tkt) => {
+      const st = tkt.treasuryStatus || 'requested';
+      return (
+        st === 'requested' ||
+        st === 'under_review' ||
+        st === 'approved_for_treasury'
+      );
+    }).length;
 
-    // Moderation queue counts
-    const pendingSellers = sellers.filter((s) => s.status === 'pending').length;
-    const pendingProducts = products.filter(
-      (p) => p.status === 'pending_review'
+    // 12 Objective Marketplace Health Indicators (Requirement 12)
+    const pendingSellerApplications = sellers.filter(
+      (s) => s.status === 'pending'
     ).length;
-    const pendingReviews = reviews.filter(
-      (r) => r.moderationStatus === 'pending'
+    const suspendedSellers = sellers.filter(
+      (s) => s.status === 'suspended'
     ).length;
-    const unansweredQuestions = questions.filter((q) => !q.answerText).length;
+    const suspendedProducts = products.filter(
+      (p) => p.status === 'suspended'
+    ).length;
+    const draftProducts = products.filter((p) => p.status === 'draft').length;
+    const criticalStockSkus = products.filter(
+      (p) =>
+        safeNumber(p.stock) > 0 &&
+        safeNumber(p.stock) <= safeNumber(p.lowStockThreshold, 5)
+    ).length;
+    const outOfStockProducts = products.filter(
+      (p) => p.status === 'out_of_stock' || safeNumber(p.stock) <= 0
+    ).length;
+    const pendingReturns = orders.filter(
+      (o) =>
+        o.returnRequest?.status === 'pending' ||
+        o.status === 'return_requested'
+    ).length;
+    const externalRefundsPending = orders.filter(
+      (o) => o.returnRequest?.refundStatus === 'external_authorized_pending'
+    ).length;
+    const failedRefundCases = orders.filter(
+      (o) => o.returnRequest?.refundStatus === 'failed'
+    ).length;
+    const pendingReviewsCount = reviews.filter(
+      (r) => r.status === 'pending'
+    ).length;
+    const unansweredQuestionsCount = questions.filter(
+      (q) => !q.answerAr && !q.answerEn
+    ).length;
 
     return {
       statusFunnel,
@@ -671,16 +832,25 @@ export default function AdminMarketplaceAnalytics() {
       ordersWithReturnReqCount: ordersWithReturnReq.length,
       resolvedReturnsCount,
       returnResolutionRate,
+      refundStateCounts,
       generalSupportCount: generalSupportTickets.length,
       resolvedSupportCount,
+      openSupportTicketsCount,
       supportResolutionRate,
-      treasuryQueueBreakdown,
-      pendingSellers,
-      pendingProducts,
-      pendingReviews,
-      unansweredQuestions,
+      pendingTreasuryRequestsCount,
+      pendingSellerApplications,
+      suspendedSellers,
+      suspendedProducts,
+      draftProducts,
+      criticalStockSkus,
+      outOfStockProducts,
+      pendingReturns,
+      externalRefundsPending,
+      failedRefundCases,
+      pendingReviewsCount,
+      unansweredQuestionsCount,
     };
-  }, [filteredOrders, tickets, sellers, products, reviews, questions]);
+  }, [filteredOrders, orders, tickets, sellers, products, reviews, questions]);
 
   // ============================================================================
   // CSV EXPORT HANDLER
@@ -711,7 +881,11 @@ export default function AdminMarketplaceAnalytics() {
         c.returnRatePercent.toFixed(1),
         c.avgRating.toFixed(2),
       ]);
-      downloadCsvFile(`atheel-analytics-categories-${dateRange}.csv`, headers, rows);
+      downloadCsvFile(
+        `atheel-analytics-categories-${dateRange}.csv`,
+        headers,
+        rows
+      );
       return;
     }
 
@@ -748,13 +922,18 @@ export default function AdminMarketplaceAnalytics() {
         r.reservation.reservedPendingPayoutAmount.toFixed(2),
         r.reservation.requestableBalance.toFixed(2),
       ]);
-      downloadCsvFile(`atheel-analytics-sellers-${dateRange}.csv`, headers, rows);
+      downloadCsvFile(
+        `atheel-analytics-sellers-${dateRange}.csv`,
+        headers,
+        rows
+      );
       return;
     }
 
     if (activeTab === 'customers_geo') {
       const headers = [
-        'City',
+        'City (AR)',
+        'City (EN)',
         'Orders Count',
         'Unique Customers',
         'Valid GMV (SAR)',
@@ -762,34 +941,44 @@ export default function AdminMarketplaceAnalytics() {
         'Average Order Value (SAR)',
       ];
       const rows = customerGeoInsights.cityRows.map((c) => [
-        c.city,
+        c.cityAr,
+        c.cityEn,
         c.ordersCount,
         c.uniqueCustomers,
         c.gmv.toFixed(2),
         c.gmvSharePercent.toFixed(1),
         c.aov.toFixed(2),
       ]);
-      downloadCsvFile(`atheel-analytics-geography-${dateRange}.csv`, headers, rows);
+      downloadCsvFile(
+        `atheel-analytics-geography-${dateRange}.csv`,
+        headers,
+        rows
+      );
       return;
     }
 
-    // Default GMV & Order summary export
     const headers = [
       'Order Number',
-      'Date',
-      'City',
+      'Created Date',
+      'Customer ID',
+      'City (AR)',
+      'City (EN)',
       'Payment Method',
       'Order Status',
-      'Payment Status',
+      'Return Status',
+      'Refund Status',
       'Total (SAR)',
     ];
     const rows = filteredOrders.map((o) => [
       o.orderNumber,
       o.createdAt,
-      o.shippingAddress?.city || '',
-      o.paymentMethod || '',
+      o.customerId,
+      o.address.cityAr,
+      o.address.cityEn,
+      o.paymentMethod,
       o.status,
-      o.paymentStatus,
+      o.returnRequest?.status || 'none',
+      o.returnRequest?.refundStatus || 'none',
       safeNumber(o.total).toFixed(2),
     ]);
     downloadCsvFile(`atheel-analytics-orders-${dateRange}.csv`, headers, rows);
@@ -815,8 +1004,8 @@ export default function AdminMarketplaceAnalytics() {
             </h2>
             <p className="text-xs text-[#57534E] max-w-3xl leading-relaxed">
               {t(
-                'مؤشرات أداء حتمية مشتقة مباشرة من الطلبات الفعلية، أداء التجار، المجموعات، التوزيع الجغرافي للمدن السعودية، ومؤشرات جودة العمليات التشغيلية.',
-                'Deterministic executive metrics derived directly from marketplace orders, seller ledgers, category velocity, Saudi city distribution, and SLA health.'
+                'مؤشرات أداء حتمية مشتقة مباشرة من الطلبات الفعلية، أداء التجار، التصنيفات، التوزيع الجغرافي للمدن السعودية، ومؤشرات سلامة العمليات التشغيلية.',
+                'Deterministic executive metrics derived directly from marketplace orders, seller ledgers, category velocity, Saudi city distribution, and operational health.'
               )}
             </p>
           </div>
@@ -856,10 +1045,12 @@ export default function AdminMarketplaceAnalytics() {
               aria-label={t('تصفية حسب المدينة', 'Filter by city')}
               className="px-3 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-bold text-[#141413]"
             >
-              <option value="all">{t('جميع المدن السعودية', 'All Saudi Cities')}</option>
+              <option value="all">
+                {t('جميع المدن السعودية', 'All Saudi Cities')}
+              </option>
               {availableCities.map((city) => (
-                <option key={city} value={city}>
-                  {city}
+                <option key={city.cityAr} value={city.cityAr}>
+                  {lang === 'ar' ? city.cityAr : city.cityEn}
                 </option>
               ))}
             </select>
@@ -899,8 +1090,8 @@ export default function AdminMarketplaceAnalytics() {
               },
               {
                 id: 'catalog',
-                ar: '4. ذكاء الكتالوج والمنتجات',
-                en: '4. Product & Catalog Intelligence',
+                ar: '4. أداء المنتجات والكتالوج',
+                en: '4. Product Performance',
                 icon: Package,
               },
               {
@@ -911,8 +1102,8 @@ export default function AdminMarketplaceAnalytics() {
               },
               {
                 id: 'operations_sla',
-                ar: '6. كفاءة العمليات والالتزام (SLA)',
-                en: '6. Operations & SLA Health',
+                ar: '6. سلامة المنصة والعمليات',
+                en: '6. Marketplace Health & Funnel',
                 icon: Activity,
               },
             ] as const
@@ -952,8 +1143,10 @@ export default function AdminMarketplaceAnalytics() {
                 {formatPrice(gmvRevenueStats.grossGmv)}
               </div>
               <p className="text-[11px] text-[#57534E]">
-                {gmvRevenueStats.ordersCount} {t('طلب مسجل في النطاق', 'orders in selected window')} ·{' '}
-                {gmvRevenueStats.totalUnitsSold} {t('قطعة', 'units')}
+                {gmvRevenueStats.ordersCount}{' '}
+                {t('طلب مسجل في النطاق', 'total orders in window')} ·{' '}
+                {gmvRevenueStats.totalUnitsSold}{' '}
+                {t('وحدة غير ملغاة', 'non-cancelled units')}
               </p>
             </div>
 
@@ -962,12 +1155,12 @@ export default function AdminMarketplaceAnalytics() {
                 {t('صافي المبيعات الفعلي (Net GMV)', 'Net Realized GMV')}
               </span>
               <div className="text-2xl font-bold font-mono text-[#0B4F3F]">
-                {formatPrice(gmvRevenueStats.netGmv)}
+                {formatPrice(gmvRevenueStats.netRealizedGmv)}
               </div>
               <p className="text-[11px] text-[#57534E]">
                 {t(
-                  'بعد استبعاد الملغي والمسترد · شامل ضريبة القيمة المضافة:',
-                  'Excludes cancelled & refunded · Included 15% VAT:'
+                  'بعد استبعاد الملغي والمسترد · ضريبة ١٥٪ مضمّنة:',
+                  'Excludes cancelled & active refunds · Included VAT:'
                 )}{' '}
                 <span className="font-mono font-bold">
                   {formatPrice(gmvRevenueStats.netVat)}
@@ -984,29 +1177,73 @@ export default function AdminMarketplaceAnalytics() {
               </div>
               <p className="text-[11px] text-white/80">
                 {t(
-                  'محتسب وفق نسب عمولة التجار المعتمدة لكل متجر',
-                  'Calculated deterministically from merchant commission tiers'
+                  'محتسب حتمياً وفق نسب عمولة التجار المعتمدة',
+                  'Derived deterministically from merchant commission tiers'
                 )}
               </p>
             </div>
 
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-1.5">
               <span className="text-[11px] font-mono uppercase text-[#8C857B]">
-                {t('متوسط سلة الطلب (AOV)', 'Average Order Value (AOV)')}
+                {t('متوسط قيمة الطلب (AOV)', 'Average Order Value (AOV)')}
               </span>
               <div className="text-2xl font-bold font-mono text-[#141413]">
                 {formatPrice(gmvRevenueStats.aov)}
               </div>
               <p className="text-[11px] text-[#57534E]">
-                {t('الطلبات المدفوعة:', 'Paid orders:')}{' '}
+                {t('عبر الطلبات غير الملغاة:', 'Across non-cancelled orders:')}{' '}
                 <span className="font-mono font-bold text-[#0B4F3F]">
-                  {gmvRevenueStats.paidOrdersCount}
-                </span>{' '}
-                · {t('المستردة:', 'Refunded:')}{' '}
-                <span className="font-mono font-bold text-[#B45309]">
-                  {gmvRevenueStats.refundedOrdersCount}
+                  {gmvRevenueStats.nonCancelledOrdersCount}
                 </span>
               </p>
+            </div>
+          </div>
+
+          {/* Truthful Order Fulfillment & Lifecycle Volume Breakdown (Requirement 10) */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4 space-y-1">
+              <span className="text-[11px] font-mono uppercase text-[#0B4F3F] font-bold">
+                {t('الطلبات غير الملغاة', 'Non-Cancelled Orders')}
+              </span>
+              <div className="text-xl font-bold font-mono text-[#141413]">
+                {gmvRevenueStats.nonCancelledOrdersCount}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4 space-y-1">
+              <span className="text-[11px] font-mono uppercase text-[#1B6B45] font-bold">
+                {t('طلبات تم تسليمها', 'Delivered Orders')}
+              </span>
+              <div className="text-xl font-bold font-mono text-[#1B6B45]">
+                {gmvRevenueStats.deliveredOrdersCount}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4 space-y-1">
+              <span className="text-[11px] font-mono uppercase text-[#B45309] font-bold">
+                {t('طلبات قيد التنفيذ والشحن', 'In-Fulfillment Orders')}
+              </span>
+              <div className="text-xl font-bold font-mono text-[#B45309]">
+                {gmvRevenueStats.inFulfillmentOrdersCount}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4 space-y-1">
+              <span className="text-[11px] font-mono uppercase text-[#9E2A2B] font-bold">
+                {t('طلبات بمطالبات إرجاع', 'Returned / Return Requested')}
+              </span>
+              <div className="text-xl font-bold font-mono text-[#9E2A2B]">
+                {gmvRevenueStats.returnedOrRequestedOrdersCount}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4 space-y-1">
+              <span className="text-[11px] font-mono uppercase text-[#57534E] font-bold">
+                {t('الطلبات الملغاة', 'Cancelled Orders')}
+              </span>
+              <div className="text-xl font-bold font-mono text-[#57534E]">
+                {gmvRevenueStats.cancelledOrdersCount}
+              </div>
             </div>
           </div>
 
@@ -1017,24 +1254,28 @@ export default function AdminMarketplaceAnalytics() {
                 <h3 className="text-base font-bold text-[#141413]">
                   {t(
                     'المنحنى الزمني لإجمالي وصافي المبيعات حسب الشهر',
-                    'Monthly Gross vs Net GMV Trajectory'
+                    'Monthly Gross vs Net Realized GMV Trajectory'
                   )}
                 </h3>
                 <p className="text-xs text-[#57534E]">
                   {t(
-                    'مقارنة إجمالي قيمة الطلبات (Gross) مع الصافي المحقق بعد المرتجعات والإلغاء (Net)',
+                    'مقارنة إجمالي قيمة الطلبات (Gross) مع الصافي الفعلي بعد استبعاد الإلغاء والمرتجعات (Net)',
                     'Compares Gross Order Volume against Net Realized GMV per period'
                   )}
                 </p>
               </div>
               <span className="text-xs font-mono text-[#8C857B]">
-                {gmvRevenueStats.periodSeries.length} {t('فترة زمنية', 'periods')}
+                {gmvRevenueStats.periodSeries.length}{' '}
+                {t('فترة زمنية', 'periods')}
               </span>
             </div>
 
             {gmvRevenueStats.periodSeries.length === 0 ? (
               <div className="py-10 text-center text-xs text-[#8C857B]">
-                {t('لا توجد طلبات ضمن النطاق الزمني المحدد', 'No orders in selected date range')}
+                {t(
+                  'لا توجد طلبات ضمن النطاق الزمني المحدد',
+                  'No orders in selected date range'
+                )}
               </div>
             ) : (
               <div className="space-y-3">
@@ -1063,12 +1304,17 @@ export default function AdminMarketplaceAnalytics() {
                               {item.period}
                             </span>
                             <span className="text-[#57534E] font-mono">
-                              {item.ordersCount} {t('طلب', 'orders')}
+                              {item.ordersCount} {t('طلب', 'orders')} (
+                              {item.nonCancelledCount}{' '}
+                              {t('غير ملغي', 'non-cancelled')})
                             </span>
                           </div>
                           <div className="flex flex-wrap items-center gap-4 font-mono">
                             <span className="text-[#57534E]">
-                              Gross: <strong className="text-[#141413]">{formatPrice(item.grossGmv)}</strong>
+                              Gross:{' '}
+                              <strong className="text-[#141413]">
+                                {formatPrice(item.grossGmv)}
+                              </strong>
                             </span>
                             <span className="text-[#0B4F3F]">
                               Net: <strong>{formatPrice(item.netGmv)}</strong>
@@ -1110,8 +1356,8 @@ export default function AdminMarketplaceAnalytics() {
               </h3>
               <p className="text-xs text-[#57534E]">
                 {t(
-                  'مرتبة تنازلياً حسب إجمالي مبيعات كل تصنيف في النطاق المحدد',
-                  'Ranked by category GMV contribution within the active filter window'
+                  'محتسبة عبر ربط عناصر الطلبات (OrderItem.productId) بكتالوج المنتجات الفعلي',
+                  'Derived by joining OrderItem.productId against the marketplace catalog'
                 )}
               </p>
             </div>
@@ -1121,13 +1367,27 @@ export default function AdminMarketplaceAnalytics() {
             <table className="w-full text-xs text-start border-collapse">
               <thead>
                 <tr className="border-b border-[#E6E0D6] text-[#8C857B] font-mono uppercase bg-[#FAF8F5]">
-                  <th className="py-3 px-3 text-start">{t('التصنيف', 'Category')}</th>
-                  <th className="py-3 px-3 text-start">{t('المنتجات النشطة', 'Active Products')}</th>
-                  <th className="py-3 px-3 text-start">{t('القطع المباعة', 'Units Sold')}</th>
-                  <th className="py-3 px-3 text-start">{t('مبيعات التصنيف (GMV)', 'Category GMV')}</th>
-                  <th className="py-3 px-3 text-start">{t('الحصة من السوق', 'Share of GMV')}</th>
-                  <th className="py-3 px-3 text-start">{t('معدل المرتجعات', 'Return Rate')}</th>
-                  <th className="py-3 px-3 text-start">{t('متوسط التقييم', 'Avg Rating')}</th>
+                  <th className="py-3 px-3 text-start">
+                    {t('التصنيف', 'Category')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('المنتجات النشطة', 'Active Products')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('القطع المباعة', 'Units Sold')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('مبيعات التصنيف (GMV)', 'Category GMV')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('الحصة من السوق', 'Share of GMV')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('معدل المرتجعات', 'Return Rate')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('متوسط التقييم', 'Avg Rating')}
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E6E0D6]">
@@ -1135,11 +1395,18 @@ export default function AdminMarketplaceAnalytics() {
                   <tr key={cat.id} className="hover:bg-[#FAF8F5]/70">
                     <td className="py-3.5 px-3 font-bold text-[#141413]">
                       <div>{lang === 'ar' ? cat.nameAr : cat.nameEn}</div>
-                      <div className="text-[10px] font-mono text-[#8C857B]">{cat.id}</div>
+                      <div className="text-[10px] font-mono text-[#8C857B]">
+                        {cat.id}
+                      </div>
                     </td>
                     <td className="py-3.5 px-3 font-mono">
-                      <span className="font-bold text-[#0B4F3F]">{cat.activeProductsCount}</span>
-                      <span className="text-[#8C857B]"> / {cat.totalProducts}</span>
+                      <span className="font-bold text-[#0B4F3F]">
+                        {cat.activeProductsCount}
+                      </span>
+                      <span className="text-[#8C857B]">
+                        {' '}
+                        / {cat.totalProducts}
+                      </span>
                     </td>
                     <td className="py-3.5 px-3 font-mono font-bold text-[#141413]">
                       {cat.unitsSold}
@@ -1152,7 +1419,9 @@ export default function AdminMarketplaceAnalytics() {
                         <div className="w-20 h-2 rounded-full bg-[#FAF8F5] border border-[#E6E0D6] overflow-hidden">
                           <div
                             className="h-full bg-[#0B4F3F]"
-                            style={{ width: `${Math.min(100, cat.gmvSharePercent)}%` }}
+                            style={{
+                              width: `${Math.min(100, cat.gmvSharePercent)}%`,
+                            }}
                           />
                         </div>
                         <span className="font-mono font-bold text-[#141413]">
@@ -1214,7 +1483,10 @@ export default function AdminMarketplaceAnalytics() {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder={t('بحث باسم المتجر أو المدينة...', 'Search boutique or city...')}
+                placeholder={t(
+                  'بحث باسم المتجر أو المدينة...',
+                  'Search boutique or city...'
+                )}
                 className="w-full ps-8 pe-3 py-1.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs"
               />
             </div>
@@ -1224,14 +1496,29 @@ export default function AdminMarketplaceAnalytics() {
             <table className="w-full text-xs text-start border-collapse">
               <thead>
                 <tr className="border-b border-[#E6E0D6] text-[#8C857B] font-mono uppercase bg-[#FAF8F5]">
-                  <th className="py-3 px-3 text-start">{t('المتجر', 'Seller')}</th>
-                  <th className="py-3 px-3 text-start">{t('المنتجات النشطة', 'Active Catalog')}</th>
-                  <th className="py-3 px-3 text-start">{t('الطلبات / القطع', 'Orders / Units')}</th>
-                  <th className="py-3 px-3 text-start">{t('إجمالي المبيعات', 'Gross Sales / GMV')}</th>
-                  <th className="py-3 px-3 text-start">{t('العمولة', 'Commission')}</th>
-                  <th className="py-3 px-3 text-start">{t('معدل الاسترجاع', 'Return Rate')}</th>
                   <th className="py-3 px-3 text-start">
-                    {t('المتاح / المحجوز / القابل للطلب', 'Available / Reserved / Requestable')}
+                    {t('المتجر', 'Seller')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('المنتجات النشطة', 'Active Catalog')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('الطلبات / القطع', 'Orders / Units')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('إجمالي المبيعات', 'Gross Sales / GMV')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('العمولة', 'Commission')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t('معدل الاسترجاع', 'Return Rate')}
+                  </th>
+                  <th className="py-3 px-3 text-start">
+                    {t(
+                      'المتاح / المحجوز / القابل للطلب',
+                      'Available / Reserved / Requestable'
+                    )}
                   </th>
                 </tr>
               </thead>
@@ -1240,23 +1527,40 @@ export default function AdminMarketplaceAnalytics() {
                   <tr key={row.seller.id} className="hover:bg-[#FAF8F5]/70">
                     <td className="py-3.5 px-3">
                       <div className="flex items-center gap-1.5 font-bold text-[#141413]">
-                        <span>{lang === 'ar' ? row.seller.nameAr : row.seller.nameEn}</span>
+                        <span>
+                          {lang === 'ar'
+                            ? row.seller.nameAr
+                            : row.seller.nameEn}
+                        </span>
                         {row.seller.verifiedBadge && (
                           <ShieldCheck className="w-3.5 h-3.5 text-[#0B4F3F]" />
                         )}
                       </div>
                       <div className="text-[11px] text-[#57534E]">
-                        {lang === 'ar' ? row.seller.cityAr : row.seller.cityEn} ·{' '}
-                        <span className="font-mono uppercase">{row.seller.status}</span>
+                        {lang === 'ar'
+                          ? row.seller.cityAr
+                          : row.seller.cityEn}{' '}
+                        ·{' '}
+                        <span className="font-mono uppercase">
+                          {row.seller.status}
+                        </span>
                       </div>
                     </td>
                     <td className="py-3.5 px-3 font-mono">
-                      <span className="font-bold text-[#0B4F3F]">{row.activeProducts}</span>
-                      <span className="text-[#8C857B]"> / {row.totalProducts}</span>
+                      <span className="font-bold text-[#0B4F3F]">
+                        {row.activeProducts}
+                      </span>
+                      <span className="text-[#8C857B]">
+                        {' '}
+                        / {row.totalProducts}
+                      </span>
                     </td>
                     <td className="py-3.5 px-3 font-mono">
-                      <span className="font-bold text-[#141413]">{row.rangeOrdersCount}</span>{' '}
-                      {t('طلب', 'orders')} ({row.rangeUnitsSold} {t('قطعة', 'u')})
+                      <span className="font-bold text-[#141413]">
+                        {row.rangeOrdersCount}
+                      </span>{' '}
+                      {t('طلب', 'orders')} ({row.rangeUnitsSold}{' '}
+                      {t('قطعة', 'u')})
                     </td>
                     <td className="py-3.5 px-3 font-mono font-bold text-[#141413]">
                       {formatPrice(row.effectiveGmv)}
@@ -1265,7 +1569,9 @@ export default function AdminMarketplaceAnalytics() {
                       <div className="font-bold text-[#0B4F3F]">
                         {formatPrice(row.effectiveCommission)}
                       </div>
-                      <div className="text-[10px] text-[#8C857B]">{row.rate}% tier</div>
+                      <div className="text-[10px] text-[#8C857B]">
+                        {row.rate}% tier
+                      </div>
                     </td>
                     <td className="py-3.5 px-3 font-mono">
                       <span
@@ -1289,12 +1595,16 @@ export default function AdminMarketplaceAnalytics() {
                         <span className="text-[#B45309]">
                           {t('محجوز:', 'Resv:')}{' '}
                           <strong>
-                            {formatPrice(row.reservation.reservedPendingPayoutAmount)}
+                            {formatPrice(
+                              row.reservation.reservedPendingPayoutAmount
+                            )}
                           </strong>
                         </span>
                         <span className="text-[#0B4F3F]">
                           {t('قابل للطلب:', 'Req:')}{' '}
-                          <strong>{formatPrice(row.reservation.requestableBalance)}</strong>
+                          <strong>
+                            {formatPrice(row.reservation.requestableBalance)}
+                          </strong>
                         </span>
                       </div>
                     </td>
@@ -1307,74 +1617,86 @@ export default function AdminMarketplaceAnalytics() {
       )}
 
       {/* ====================================================================
-          TAB 4: PRODUCT & CATALOG INTELLIGENCE
+          TAB 4: PRODUCT PERFORMANCE & CATALOG INTELLIGENCE (REQ 6 & 11)
       ==================================================================== */}
       {activeTab === 'catalog' && (
         <div className="space-y-6">
-          {/* Catalog Moderation Status Cards */}
+          {/* Real ProductStatus Breakdown ('active' | 'draft' | 'out_of_stock' | 'suspended') */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4">
               <span className="text-[11px] font-mono uppercase text-[#0B4F3F] font-bold">
-                {t('منتجات نشطة بالمتجر', 'Active Storefront Products')}
+                {t('منتجات نشطة (active)', 'Active Products')}
               </span>
               <div className="text-2xl font-bold font-mono text-[#0B4F3F] mt-1">
                 {catalogIntelligence.statusBreakdown.active}
               </div>
             </div>
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4">
-              <span className="text-[11px] font-mono uppercase text-[#B45309] font-bold">
-                {t('بانتظار المراجعة الرقابية', 'Pending Review Queue')}
+              <span className="text-[11px] font-mono uppercase text-[#57534E] font-bold">
+                {t('مسودات التجار (draft)', 'Draft Products')}
               </span>
-              <div className="text-2xl font-bold font-mono text-[#B45309] mt-1">
-                {catalogIntelligence.statusBreakdown.pending_review}
+              <div className="text-2xl font-bold font-mono text-[#141413] mt-1">
+                {catalogIntelligence.statusBreakdown.draft}
               </div>
             </div>
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4">
-              <span className="text-[11px] font-mono uppercase text-[#57534E] font-bold">
-                {t('منتجات متوقفة مؤقتاً', 'Paused by Seller/Admin')}
+              <span className="text-[11px] font-mono uppercase text-[#B45309] font-bold">
+                {t('منتجات موقوفة رقابياً (suspended)', 'Suspended Products')}
               </span>
-              <div className="text-2xl font-bold font-mono text-[#141413] mt-1">
-                {catalogIntelligence.statusBreakdown.paused}
+              <div className="text-2xl font-bold font-mono text-[#B45309] mt-1">
+                {catalogIntelligence.statusBreakdown.suspended}
               </div>
             </div>
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4">
               <span className="text-[11px] font-mono uppercase text-[#9E2A2B] font-bold">
-                {t('منتجات مرفوضة رقابياً', 'Rejected Products')}
+                {t('منتجات نافدة (out_of_stock)', 'Out-of-Stock Products')}
               </span>
               <div className="text-2xl font-bold font-mono text-[#9E2A2B] mt-1">
-                {catalogIntelligence.statusBreakdown.rejected}
+                {catalogIntelligence.statusBreakdown.out_of_stock}
               </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Top Products by Revenue */}
+            {/* Top Revenue Products */}
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-3">
               <h3 className="text-sm font-bold text-[#141413]">
-                {t('أعلى المنتجات تحقيقاً للإيرادات', 'Top Revenue-Generating Products')}
+                {t(
+                  'أعلى المنتجات تحقيقاً للإيرادات (Top Revenue Products)',
+                  'Top Revenue Products'
+                )}
               </h3>
               <div className="divide-y divide-[#E6E0D6]">
-                {catalogIntelligence.topByRevenue.map((item, idx) => (
+                {catalogIntelligence.topByRevenue.map((stat, idx) => (
                   <div
-                    key={item.product.id}
+                    key={stat.product.id}
                     className="py-2.5 flex items-center justify-between gap-3 text-xs"
                   >
                     <div className="space-y-0.5">
                       <div className="font-bold text-[#141413]">
                         #{idx + 1} ·{' '}
-                        {lang === 'ar' ? item.product.titleAr : item.product.titleEn}
+                        {lang === 'ar'
+                          ? stat.product.titleAr
+                          : stat.product.titleEn}
                       </div>
                       <div className="text-[11px] text-[#57534E]">
-                        {lang === 'ar' ? item.sellerNameAr : item.sellerNameEn} · SKU:{' '}
-                        <span className="font-mono">{item.product.sku}</span>
+                        {lang === 'ar' ? stat.sellerNameAr : stat.sellerNameEn}{' '}
+                        ·{' '}
+                        {lang === 'ar'
+                          ? stat.categoryNameAr
+                          : stat.categoryNameEn}{' '}
+                        · SKU:{' '}
+                        <span className="font-mono">{stat.product.sku}</span>
                       </div>
                     </div>
-                    <div className="text-end font-mono">
+                    <div className="text-end font-mono shrink-0">
                       <div className="font-bold text-[#0B4F3F]">
-                        {formatPrice(item.revenue)}
+                        {formatPrice(stat.revenue)}
                       </div>
                       <div className="text-[11px] text-[#8C857B]">
-                        {item.unitsSold} {t('قطعة مباعة', 'units sold')}
+                        {stat.unitsSold} {t('وحدة', 'units')} · ★{' '}
+                        {stat.product.rating.toFixed(1)} (
+                        {stat.product.reviewCount})
                       </div>
                     </div>
                   </div>
@@ -1382,50 +1704,156 @@ export default function AdminMarketplaceAnalytics() {
               </div>
             </div>
 
-            {/* Low Stock & High Return Risk */}
-            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-4">
+            {/* Top Units Sold */}
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-3">
+              <h3 className="text-sm font-bold text-[#141413]">
+                {t(
+                  'الأعلى مبيعاً حسب عدد الوحدات (Top Units Sold)',
+                  'Top Units Sold Products'
+                )}
+              </h3>
+              <div className="divide-y divide-[#E6E0D6]">
+                {catalogIntelligence.topByUnits.map((stat, idx) => (
+                  <div
+                    key={stat.product.id}
+                    className="py-2.5 flex items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="font-bold text-[#141413]">
+                        #{idx + 1} ·{' '}
+                        {lang === 'ar'
+                          ? stat.product.titleAr
+                          : stat.product.titleEn}
+                      </div>
+                      <div className="text-[11px] text-[#57534E]">
+                        {lang === 'ar' ? stat.sellerNameAr : stat.sellerNameEn}{' '}
+                        · {t('المخزون:', 'Stock:')}{' '}
+                        <span className="font-mono font-bold">
+                          {stat.product.stock}
+                        </span>
+                        {stat.returnOrderCount > 0 && (
+                          <span className="ms-2 text-[#9E2A2B]">
+                            · {stat.returnOrderCount}{' '}
+                            {t('طلب بمرتجع', 'order return(s)')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-end font-mono shrink-0">
+                      <div className="font-bold text-[#141413]">
+                        {stat.unitsSold}{' '}
+                        {t('وحدة في النطاق', 'units in range')}
+                      </div>
+                      <div className="text-[11px] text-[#0B4F3F]">
+                        {formatPrice(stat.revenue)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Low Stock High Demand */}
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-3">
               <div>
                 <h3 className="text-sm font-bold text-[#141413]">
                   {t(
-                    'تنبيهات نفاد المخزون والمنتجات ذات الاسترجاع المرتفع',
-                    'Inventory Depletion & Return Risk Watchlist'
+                    'منتجات عالية الطلب ومنخفضة المخزون (Low Stock High Demand)',
+                    'Low Stock High Demand Watchlist'
                   )}
                 </h3>
                 <p className="text-[11px] text-[#57534E]">
                   {t(
-                    'المنتجات التي يقل مخزونها عن 5 قطع أو سجلت طلبات استرجاع',
-                    'Products with <= 5 units in stock or recorded return requests'
+                    'المنتجات التي وصلت إلى حد التنبيه الحرج للمخزون مع استمرار الطلب عليها',
+                    'Active SKUs at or below lowStockThreshold sorted by sales velocity'
                   )}
                 </p>
               </div>
-
               <div className="space-y-2">
-                {catalogIntelligence.lowStockProducts.slice(0, 6).map((p) => (
-                  <div
-                    key={p.id}
-                    className="p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] flex items-center justify-between gap-3 text-xs"
-                  >
-                    <div>
-                      <div className="font-bold text-[#141413]">
-                        {lang === 'ar' ? p.titleAr : p.titleEn}
+                {catalogIntelligence.lowStockHighDemand.length === 0 ? (
+                  <p className="text-xs text-[#8C857B] py-4 text-center">
+                    {t(
+                      'لا توجد منتجات حرجة المخزون حالياً',
+                      'No critical low-stock products at this time'
+                    )}
+                  </p>
+                ) : (
+                  catalogIntelligence.lowStockHighDemand
+                    .slice(0, 6)
+                    .map((stat) => (
+                      <div
+                        key={stat.product.id}
+                        className="p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div>
+                          <div className="font-bold text-[#141413]">
+                            {lang === 'ar'
+                              ? stat.product.titleAr
+                              : stat.product.titleEn}
+                          </div>
+                          <div className="text-[11px] font-mono text-[#8C857B]">
+                            SKU: {stat.product.sku} ·{' '}
+                            {formatPrice(stat.product.price)} ·{' '}
+                            {stat.product.soldCount}{' '}
+                            {t('مبيع تراكمي', 'total sold')}
+                          </div>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-[#B45309] border border-amber-200 font-mono font-bold shrink-0">
+                          {stat.product.stock} {t('متبقي', 'left')}
+                        </span>
                       </div>
-                      <div className="text-[11px] font-mono text-[#8C857B]">
-                        SKU: {p.sku} · {formatPrice(p.price)}
-                      </div>
-                    </div>
-                    <span
-                      className={`px-2.5 py-1 rounded-lg font-mono font-bold ${
-                        safeNumber(p.stock) === 0
-                          ? 'bg-red-50 text-[#9E2A2B] border border-red-200'
-                          : 'bg-amber-50 text-[#B45309] border border-amber-200'
-                      }`}
+                    ))
+                )}
+              </div>
+            </div>
+
+            {/* Out-of-Stock Revenue Risk */}
+            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-3">
+              <div>
+                <h3 className="text-sm font-bold text-[#141413]">
+                  {t(
+                    'مخاطر الإيرادات للمنتجات النافدة (Out-of-Stock Revenue Risk)',
+                    'Out-of-Stock Revenue Risk'
+                  )}
+                </h3>
+                <p className="text-[11px] text-[#57534E]">
+                  {t(
+                    'المنتجات المتوقفة بسبب نفاد الكمية (stock = 0 أو out_of_stock)',
+                    'Products with status out_of_stock or zero inventory'
+                  )}
+                </p>
+              </div>
+              <div className="space-y-2">
+                {catalogIntelligence.outOfStockRisk.length === 0 ? (
+                  <p className="text-xs text-[#0B4F3F] font-semibold py-4 text-center">
+                    {t(
+                      'جميع المنتجات المعتمدة متوفرة في المخزون حالياً (0 نافد)',
+                      'All catalog products currently have positive stock (0 out-of-stock)'
+                    )}
+                  </p>
+                ) : (
+                  catalogIntelligence.outOfStockRisk.slice(0, 6).map((stat) => (
+                    <div
+                      key={stat.product.id}
+                      className="p-3 rounded-xl bg-red-50/40 border border-red-200 flex items-center justify-between gap-3 text-xs"
                     >
-                      {safeNumber(p.stock) === 0
-                        ? t('نافد (0)', 'Out of Stock (0)')
-                        : `${p.stock} ${t('قطع متبقية', 'left')}`}
-                    </span>
-                  </div>
-                ))}
+                      <div>
+                        <div className="font-bold text-[#141413]">
+                          {lang === 'ar'
+                            ? stat.product.titleAr
+                            : stat.product.titleEn}
+                        </div>
+                        <div className="text-[11px] font-mono text-[#57534E]">
+                          SKU: {stat.product.sku} ·{' '}
+                          {formatPrice(stat.product.price)}
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-lg bg-red-50 text-[#9E2A2B] border border-red-200 font-mono font-bold shrink-0">
+                        {t('نافد (0)', 'Out of Stock (0)')}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -1433,7 +1861,7 @@ export default function AdminMarketplaceAnalytics() {
       )}
 
       {/* ====================================================================
-          TAB 5: CUSTOMERS & SAUDI GEOGRAPHY
+          TAB 5: CUSTOMERS & SAUDI GEOGRAPHY (REQ 9 & 10)
       ==================================================================== */}
       {activeTab === 'customers_geo' && (
         <div className="space-y-6">
@@ -1447,7 +1875,10 @@ export default function AdminMarketplaceAnalytics() {
               </div>
               <p className="text-[11px] text-[#57534E]">
                 {customerGeoInsights.activeOrderingCustomers}{' '}
-                {t('عميل نشط بطلبات في النطاق', 'active ordering customers in window')}
+                {t(
+                  'عميل نشط بطلبات في النطاق',
+                  'active ordering customers in window'
+                )}
               </p>
             </div>
 
@@ -1459,20 +1890,25 @@ export default function AdminMarketplaceAnalytics() {
                 {customerGeoInsights.repeatCustomerRate.toFixed(1)}%
               </div>
               <p className="text-[11px] text-[#57534E]">
-                {customerGeoInsights.repeatCustomersCount} {t('عميل متكرر مقابل', 'repeat vs')}{' '}
-                {customerGeoInsights.singleOrderCustomersCount} {t('طلب منفرد', 'single-order')}
+                {customerGeoInsights.repeatCustomersCount}{' '}
+                {t('عميل متكرر مقابل', 'repeat vs')}{' '}
+                {customerGeoInsights.singleOrderCustomersCount}{' '}
+                {t('طلب منفرد', 'single-order')}
               </p>
             </div>
 
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-1">
               <span className="text-[11px] font-mono uppercase text-[#8C857B]">
-                {t('متوسط إنفاق العميل (LTV)', 'Average Customer Spend')}
+                {t('متوسط إنفاق العميل', 'Average Customer Spend')}
               </span>
               <div className="text-2xl font-bold font-mono text-[#141413]">
                 {formatPrice(customerGeoInsights.avgCustomerLtv)}
               </div>
               <p className="text-[11px] text-[#57534E]">
-                {t('صافي قيمة الطلبات لكل عميل نشط', 'Realized spend per active buyer')}
+                {t(
+                  'صافي قيمة الطلبات لكل عميل نشط (customerId)',
+                  'Realized spend per unique customerId'
+                )}
               </p>
             </div>
 
@@ -1484,7 +1920,10 @@ export default function AdminMarketplaceAnalytics() {
                 {formatPrice(customerGeoInsights.totalCustomerWalletLiability)}
               </div>
               <p className="text-[11px] text-[#57534E]">
-                {t('رصيد داخلي جاهز للشراء الفوري', 'Available store credit across buyers')}
+                {t(
+                  'رصيد داخلي جاهز للشراء الفوري',
+                  'Available store credit across buyers'
+                )}
               </p>
             </div>
           </div>
@@ -1494,7 +1933,7 @@ export default function AdminMarketplaceAnalytics() {
             <div className="lg:col-span-2 bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-4">
               <h3 className="text-base font-bold text-[#141413]">
                 {t(
-                  'التوزيع الجغرافي للمبيعات حسب المدن السعودية',
+                  'التوزيع الجغرافي للمبيعات حسب المدن السعودية (order.address)',
                   'Geographic GMV & Order Distribution Across Saudi Cities'
                 )}
               </h3>
@@ -1502,27 +1941,45 @@ export default function AdminMarketplaceAnalytics() {
                 <table className="w-full text-xs text-start border-collapse">
                   <thead>
                     <tr className="border-b border-[#E6E0D6] text-[#8C857B] font-mono uppercase bg-[#FAF8F5]">
-                      <th className="py-2.5 px-3 text-start">{t('المدينة', 'City')}</th>
-                      <th className="py-2.5 px-3 text-start">{t('الطلبات', 'Orders')}</th>
-                      <th className="py-2.5 px-3 text-start">{t('العملاء', 'Buyers')}</th>
-                      <th className="py-2.5 px-3 text-start">{t('صافي المبيعات', 'Valid GMV')}</th>
-                      <th className="py-2.5 px-3 text-start">{t('الحصة', 'Share')}</th>
-                      <th className="py-2.5 px-3 text-start">{t('متوسط السلة', 'AOV')}</th>
+                      <th className="py-2.5 px-3 text-start">
+                        {t('المدينة', 'City')}
+                      </th>
+                      <th className="py-2.5 px-3 text-start">
+                        {t('الطلبات', 'Orders')}
+                      </th>
+                      <th className="py-2.5 px-3 text-start">
+                        {t('العملاء الفريدون', 'Unique Buyers')}
+                      </th>
+                      <th className="py-2.5 px-3 text-start">
+                        {t('إجمالي المبيعات (GMV)', 'City GMV')}
+                      </th>
+                      <th className="py-2.5 px-3 text-start">
+                        {t('الحصة', 'Share')}
+                      </th>
+                      <th className="py-2.5 px-3 text-start">
+                        {t('متوسط الطلب (AOV)', 'AOV')}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E6E0D6]">
                     {customerGeoInsights.cityRows.map((c) => (
-                      <tr key={c.city} className="hover:bg-[#FAF8F5]">
-                        <td className="py-3 px-3 font-bold text-[#141413]">{c.city}</td>
+                      <tr key={c.cityAr} className="hover:bg-[#FAF8F5]">
+                        <td className="py-3 px-3 font-bold text-[#141413]">
+                          {lang === 'ar' ? c.cityAr : c.cityEn}
+                        </td>
                         <td className="py-3 px-3 font-mono">{c.ordersCount}</td>
-                        <td className="py-3 px-3 font-mono">{c.uniqueCustomers}</td>
+                        <td className="py-3 px-3 font-mono">
+                          {c.uniqueCustomers}
+                        </td>
                         <td className="py-3 px-3 font-mono font-bold text-[#0B4F3F]">
                           {formatPrice(c.gmv)}
                         </td>
                         <td className="py-3 px-3 font-mono font-bold">
                           {c.gmvSharePercent.toFixed(1)}%
                         </td>
-                        <td className="py-3 px-3 font-mono">{formatPrice(c.aov)}</td>
+                        <td className="py-3 px-3 font-mono">
+                          {formatPrice(c.aov)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1535,35 +1992,48 @@ export default function AdminMarketplaceAnalytics() {
               <div className="flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-[#0B4F3F]" />
                 <h3 className="text-base font-bold text-[#141413]">
-                  {t('مزيج وسائل الدفع', 'Payment Method Mix')}
+                  {t(
+                    'مزيج وسائل الدفع (order.paymentMethod)',
+                    'Payment Method Mix'
+                  )}
                 </h3>
               </div>
               <div className="space-y-3">
-                {customerGeoInsights.paymentRows.map((pm) => (
-                  <div
-                    key={pm.method}
-                    className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-[#141413]">{pm.method}</span>
-                      <span className="font-mono font-bold text-[#0B4F3F]">
-                        {pm.sharePercent.toFixed(1)}%
-                      </span>
+                {customerGeoInsights.paymentRows.map((pm) => {
+                  const labelObj = PAYMENT_METHOD_LABELS[pm.method] || {
+                    ar: pm.method,
+                    en: pm.method,
+                  };
+                  return (
+                    <div
+                      key={pm.method}
+                      className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-[#141413]">
+                          {lang === 'ar' ? labelObj.ar : labelObj.en}
+                        </span>
+                        <span className="font-mono font-bold text-[#0B4F3F]">
+                          {pm.sharePercent.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="w-full h-2 rounded-full bg-[#E6E0D6] overflow-hidden">
+                        <div
+                          className="h-full bg-[#0B4F3F]"
+                          style={{
+                            width: `${Math.min(100, pm.sharePercent)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] font-mono text-[#57534E]">
+                        <span>
+                          {pm.ordersCount} {t('طلب', 'orders')}
+                        </span>
+                        <span>{formatPrice(pm.gmv)}</span>
+                      </div>
                     </div>
-                    <div className="w-full h-2 rounded-full bg-[#E6E0D6] overflow-hidden">
-                      <div
-                        className="h-full bg-[#0B4F3F]"
-                        style={{ width: `${Math.min(100, pm.sharePercent)}%` }}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] font-mono text-[#57534E]">
-                      <span>
-                        {pm.ordersCount} {t('طلب', 'orders')}
-                      </span>
-                      <span>{formatPrice(pm.gmv)}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1571,26 +2041,26 @@ export default function AdminMarketplaceAnalytics() {
       )}
 
       {/* ====================================================================
-          TAB 6: OPERATIONS & SLA HEALTH
+          TAB 6: MARKETPLACE HEALTH & ORDER FUNNEL (REQ 3, 4, 7, 8 & 12)
       ==================================================================== */}
       {activeTab === 'operations_sla' && (
         <div className="space-y-6">
-          {/* Funnel Summary */}
+          {/* Real 9-State OrderStatus Funnel (Requirement 3) */}
           <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-4">
             <h3 className="text-base font-bold text-[#141413]">
               {t(
-                'قمع تنفيذ الطلبات ومؤشرات الإنجاز اللوجستي (Order Fulfillment Funnel)',
-                'End-to-End Order Fulfillment Funnel & Delivery SLA'
+                'قمع حالات الطلبات الفعلي (Real OrderStatus Operational Funnel)',
+                'End-to-End OrderStatus Operational Funnel'
               )}
             </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-3">
               {(
                 [
                   {
-                    key: 'pending',
-                    ar: 'بانتظار التأكيد',
-                    en: 'Pending',
-                    val: operationsHealth.statusFunnel.pending,
+                    key: 'placed',
+                    ar: 'تم الإنشاء',
+                    en: 'Placed',
+                    val: operationsHealth.statusFunnel.placed,
                   },
                   {
                     key: 'confirmed',
@@ -1599,10 +2069,10 @@ export default function AdminMarketplaceAnalytics() {
                     val: operationsHealth.statusFunnel.confirmed,
                   },
                   {
-                    key: 'processing',
+                    key: 'preparing',
                     ar: 'قيد التجهيز',
-                    en: 'Processing',
-                    val: operationsHealth.statusFunnel.processing,
+                    en: 'Preparing',
+                    val: operationsHealth.statusFunnel.preparing,
                   },
                   {
                     key: 'shipped',
@@ -1611,10 +2081,22 @@ export default function AdminMarketplaceAnalytics() {
                     val: operationsHealth.statusFunnel.shipped,
                   },
                   {
+                    key: 'out_for_delivery',
+                    ar: 'خرج للتوصيل',
+                    en: 'Out for Delivery',
+                    val: operationsHealth.statusFunnel.out_for_delivery,
+                  },
+                  {
                     key: 'delivered',
                     ar: 'تم التسليم',
                     en: 'Delivered',
                     val: operationsHealth.statusFunnel.delivered,
+                  },
+                  {
+                    key: 'return_requested',
+                    ar: 'طلب إرجاع',
+                    en: 'Return Req.',
+                    val: operationsHealth.statusFunnel.return_requested,
                   },
                   {
                     key: 'returned',
@@ -1632,7 +2114,7 @@ export default function AdminMarketplaceAnalytics() {
               ).map((step) => (
                 <div
                   key={step.key}
-                  className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-center space-y-1"
+                  className="p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-center space-y-1"
                 >
                   <span className="text-[10px] font-mono uppercase text-[#8C857B] block">
                     {lang === 'ar' ? step.ar : step.en}
@@ -1645,16 +2127,133 @@ export default function AdminMarketplaceAnalytics() {
             </div>
           </div>
 
-          {/* SLA & Governance Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          {/* 12 Objective Marketplace Health Indicators (Requirement 12) */}
+          <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-4">
+            <div className="flex items-center justify-between gap-2 border-b border-[#E6E0D6] pb-3">
+              <div>
+                <h3 className="text-base font-bold text-[#141413]">
+                  {t(
+                    'مؤشرات سلامة المنصة والحوكمة التشغيلية (Marketplace Health)',
+                    'Objective Marketplace Health & Governance Matrix'
+                  )}
+                </h3>
+                <p className="text-xs text-[#57534E]">
+                  {t(
+                    'قراءات حتمية مباشرة من الحالات الفعلية للتجار، المنتجات، المرتجعات، الخزينة، والتذاكر',
+                    'Deterministic counts derived strictly from real current entity states'
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {[
+                {
+                  ar: 'طلبات انضمام تجار معلقة (pending)',
+                  en: 'Pending Seller Applications',
+                  value: operationsHealth.pendingSellerApplications,
+                  tone: 'text-[#B45309]',
+                },
+                {
+                  ar: 'تجار موقوفون (suspended)',
+                  en: 'Suspended Sellers',
+                  value: operationsHealth.suspendedSellers,
+                  tone: 'text-[#9E2A2B]',
+                },
+                {
+                  ar: 'منتجات موقوفة رقابياً (suspended)',
+                  en: 'Suspended Products',
+                  value: operationsHealth.suspendedProducts,
+                  tone: 'text-[#9E2A2B]',
+                },
+                {
+                  ar: 'مسودات منتجات (draft)',
+                  en: 'Draft Products',
+                  value: operationsHealth.draftProducts,
+                  tone: 'text-[#57534E]',
+                },
+                {
+                  ar: 'منتجات حرجة المخزون (Critical Stock)',
+                  en: 'Critical Stock SKUs',
+                  value: operationsHealth.criticalStockSkus,
+                  tone: 'text-[#B45309]',
+                },
+                {
+                  ar: 'منتجات نافدة المخزون (Out-of-Stock)',
+                  en: 'Out-of-Stock Products',
+                  value: operationsHealth.outOfStockProducts,
+                  tone: 'text-[#9E2A2B]',
+                },
+                {
+                  ar: 'طلبات إرجاع معلقة (Pending Returns)',
+                  en: 'Pending Returns',
+                  value: operationsHealth.pendingReturns,
+                  tone: 'text-[#B45309]',
+                },
+                {
+                  ar: 'استردادات خارجية بانتظار البوابة',
+                  en: 'External Refunds Pending',
+                  value: operationsHealth.externalRefundsPending,
+                  tone: 'text-[#9E2A2B]',
+                },
+                {
+                  ar: 'حالات استرداد متعثرة (failed)',
+                  en: 'Failed Refund Cases',
+                  value: operationsHealth.failedRefundCases,
+                  tone: 'text-[#9E2A2B]',
+                },
+                {
+                  ar: 'تذاكر دعم مفتوحة (Open Tickets)',
+                  en: 'Open Support Tickets',
+                  value: operationsHealth.openSupportTicketsCount,
+                  tone: 'text-[#0B4F3F]',
+                },
+                {
+                  ar: 'طلبات تسوية خزينة معلقة',
+                  en: 'Pending Treasury Requests',
+                  value: operationsHealth.pendingTreasuryRequestsCount,
+                  tone: 'text-[#B45309]',
+                },
+                {
+                  ar: 'استفسارات منتجات غير مجابة',
+                  en: 'Unanswered Product Questions',
+                  value: operationsHealth.unansweredQuestionsCount,
+                  tone: 'text-[#141413]',
+                },
+              ].map((metric, index) => (
+                <div
+                  key={index}
+                  className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-1"
+                >
+                  <div className="text-xs text-[#57534E] font-semibold">
+                    {lang === 'ar' ? metric.ar : metric.en}
+                  </div>
+                  <div
+                    className={`text-2xl font-bold font-mono ${metric.tone}`}
+                  >
+                    {metric.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Return Resolution & Refund State Breakdown (Requirement 4) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-3">
               <span className="text-xs font-mono uppercase text-[#0B4F3F] font-bold">
-                {t('كفاءة معالجة المرتجعات والدعم', 'Returns & Support Resolution SLA')}
+                {t(
+                  'معدلات الفصل في المرتجعات والدعم الفني',
+                  'Return Adjudication & Support Resolution'
+                )}
               </span>
               <div className="space-y-2 text-xs">
                 <div className="flex items-center justify-between py-1.5 border-b border-[#E6E0D6]">
                   <span className="text-[#57534E]">
-                    {t('معدل تسليم الطلبات المكتملة', 'Order Delivery Success Rate')}
+                    {t(
+                      'معدل تسليم الطلبات المكتملة (delivered)',
+                      'Order Delivery Rate'
+                    )}
                   </span>
                   <span className="font-mono font-bold text-[#0B4F3F]">
                     {operationsHealth.deliverySuccessRate.toFixed(1)}%
@@ -1662,7 +2261,10 @@ export default function AdminMarketplaceAnalytics() {
                 </div>
                 <div className="flex items-center justify-between py-1.5 border-b border-[#E6E0D6]">
                   <span className="text-[#57534E]">
-                    {t('معدل إغلاق طلبات الاسترجاع', 'Return Request Resolution Rate')}
+                    {t(
+                      'معدل البت في المرتجعات (approved / rejected)',
+                      'Return Adjudication Rate (approved / rejected)'
+                    )}
                   </span>
                   <span className="font-mono font-bold text-[#141413]">
                     {operationsHealth.returnResolutionRate.toFixed(1)}% (
@@ -1670,9 +2272,12 @@ export default function AdminMarketplaceAnalytics() {
                     {operationsHealth.ordersWithReturnReqCount})
                   </span>
                 </div>
-                <div className="flex items-center justify-between py-1.5">
+                <div className="flex items-center justify-between py-1.5 border-b border-[#E6E0D6]">
                   <span className="text-[#57534E]">
-                    {t('معدل حل تذاكر الدعم الفني', 'Support Ticket Resolution Rate')}
+                    {t(
+                      'معدل حل تذاكر الدعم الفني',
+                      'Support Ticket Resolution Rate'
+                    )}
                   </span>
                   <span className="font-mono font-bold text-[#0B4F3F]">
                     {operationsHealth.supportResolutionRate.toFixed(1)}% (
@@ -1680,77 +2285,73 @@ export default function AdminMarketplaceAnalytics() {
                     {operationsHealth.generalSupportCount})
                   </span>
                 </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-3">
-              <span className="text-xs font-mono uppercase text-[#C59B27] font-bold">
-                {t('حالة طابور الخزينة والتسويات', 'Treasury Payout Queue SLA')}
-              </span>
-              <div className="space-y-2 text-xs font-mono">
-                <div className="flex items-center justify-between py-1 border-b border-[#E6E0D6]">
-                  <span className="font-sans text-[#57534E]">
-                    {t('طلبات سحب جديدة (Requested)', 'Requested')}
+                <div className="flex items-center justify-between py-1.5">
+                  <span className="text-[#57534E]">
+                    {t(
+                      'مراجعات العملاء قيد الانتظار (review.status = pending)',
+                      'Pending Customer Reviews'
+                    )}
                   </span>
-                  <span className="font-bold text-[#B45309]">
-                    {operationsHealth.treasuryQueueBreakdown.requested}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between py-1 border-b border-[#E6E0D6]">
-                  <span className="font-sans text-[#57534E]">
-                    {t('قيد المراجعة المالية (Under Review)', 'Under Review')}
-                  </span>
-                  <span className="font-bold text-[#141413]">
-                    {operationsHealth.treasuryQueueBreakdown.under_review}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between py-1 border-b border-[#E6E0D6]">
-                  <span className="font-sans text-[#57534E]">
-                    {t('معتمد للتحويل البنكي (Approved)', 'Approved for Treasury')}
-                  </span>
-                  <span className="font-bold text-[#0B4F3F]">
-                    {operationsHealth.treasuryQueueBreakdown.approved_for_treasury}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <span className="font-sans text-[#57534E]">
-                    {t('مكتمل / مرفوض', 'Completed / Rejected')}
-                  </span>
-                  <span className="font-bold text-[#57534E]">
-                    {operationsHealth.treasuryQueueBreakdown.completed} /{' '}
-                    {operationsHealth.treasuryQueueBreakdown.rejected}
+                  <span className="font-mono font-bold text-[#B45309]">
+                    {operationsHealth.pendingReviewsCount}
                   </span>
                 </div>
               </div>
             </div>
 
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 space-y-3">
-              <span className="text-xs font-mono uppercase text-[#8C857B] font-bold">
-                {t('طابور الرقابة والامتثال المفتوح', 'Active Governance & Moderation Backlog')}
+              <span className="text-xs font-mono uppercase text-[#9E2A2B] font-bold">
+                {t(
+                  'توزيع حالات الاسترداد المالي (ReturnRequest.refundStatus)',
+                  'Financial Refund Exposure States (refundStatus)'
+                )}
               </span>
               <div className="space-y-2 text-xs">
                 <div className="flex items-center justify-between py-1.5 border-b border-[#E6E0D6]">
                   <span className="text-[#57534E]">
-                    {t('طلبات انضمام تجار معلقة', 'Pending Seller Applications')}
+                    {t(
+                      'مكتمل في محفظة العميل (wallet_completed)',
+                      'Wallet Completed (Settled Credit)'
+                    )}
                   </span>
-                  <span className="font-mono font-bold text-[#B45309]">
-                    {operationsHealth.pendingSellers}
+                  <span className="font-mono font-bold text-[#1B6B45]">
+                    {operationsHealth.refundStateCounts.wallet_completed}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1.5 border-b border-[#E6E0D6]">
+                  <span className="text-[#9E2A2B] font-semibold">
+                    {t(
+                      'التزام معلق لبوابة الدفع (external_authorized_pending)',
+                      'External Authorized Pending (Gateway Liability)'
+                    )}
+                  </span>
+                  <span className="font-mono font-bold text-[#9E2A2B]">
+                    {
+                      operationsHealth.refundStateCounts
+                        .external_authorized_pending
+                    }
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-1.5 border-b border-[#E6E0D6]">
                   <span className="text-[#57534E]">
-                    {t('منتجات بانتظار الفحص الرقابي', 'Products Pending Moderation')}
+                    {t(
+                      'استرداد متعثر يتطلب معالجة (failed)',
+                      'Failed Gateway Reversal (failed)'
+                    )}
                   </span>
                   <span className="font-mono font-bold text-[#B45309]">
-                    {operationsHealth.pendingProducts}
+                    {operationsHealth.refundStateCounts.failed}
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-1.5">
                   <span className="text-[#57534E]">
-                    {t('مراجعات معلقة / أسئلة غير مجابة', 'Pending Reviews / Unanswered Q&A')}
+                    {t(
+                      'بانتظار قرار الفصل الرقابي (none)',
+                      'Awaiting Adjudication (none)'
+                    )}
                   </span>
                   <span className="font-mono font-bold text-[#141413]">
-                    {operationsHealth.pendingReviews} / {operationsHealth.unansweredQuestions}
+                    {operationsHealth.refundStateCounts.none}
                   </span>
                 </div>
               </div>

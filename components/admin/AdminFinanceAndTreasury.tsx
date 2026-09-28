@@ -1376,6 +1376,7 @@ export default function AdminFinanceAndTreasury() {
                     ar: 'معتمد للخزينة (approved_for_treasury)',
                     en: 'Approved for Treasury',
                   },
+                  { id: 'completed', ar: 'مكتمل (completed)', en: 'Completed' },
                   { id: 'rejected', ar: 'مرفوض (rejected)', en: 'Rejected' },
                 ] as const
               ).map((st) => (
