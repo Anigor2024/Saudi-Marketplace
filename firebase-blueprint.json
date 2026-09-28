@@ -1,0 +1,200 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Marketplace product listing with bilingual content, variants, specs, pricing, and inventory",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sku": { "type": "string" },
+        "titleAr": { "type": "string" },
+        "titleEn": { "type": "string" },
+        "descriptionAr": { "type": "string" },
+        "descriptionEn": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "subcategoryAr": { "type": "string" },
+        "subcategoryEn": { "type": "string" },
+        "brandId": { "type": "string" },
+        "brandNameAr": { "type": "string" },
+        "brandNameEn": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "sellerNameAr": { "type": "string" },
+        "sellerNameEn": { "type": "string" },
+        "sellerRating": { "type": "number" },
+        "price": { "type": "number" },
+        "originalPrice": { "type": "number" },
+        "discountPercent": { "type": "number" },
+        "stock": { "type": "number" },
+        "lowStockThreshold": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "draft", "out_of_stock", "suspended"] },
+        "rating": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "soldCount": { "type": "number" },
+        "images": { "type": "array", "items": { "type": "string" } },
+        "isFlashDeal": { "type": "boolean" },
+        "isFeatured": { "type": "boolean" },
+        "isTrending": { "type": "boolean" },
+        "isBestSeller": { "type": "boolean" },
+        "isNewArrival": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "sku", "titleAr", "titleEn", "categoryId", "sellerId", "price", "stock", "status"]
+    },
+    "Seller": {
+      "title": "Seller",
+      "description": "Multi-vendor merchant profile, business verification, commission rate, and financial metrics",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nameAr": { "type": "string" },
+        "nameEn": { "type": "string" },
+        "descriptionAr": { "type": "string" },
+        "descriptionEn": { "type": "string" },
+        "cityAr": { "type": "string" },
+        "cityEn": { "type": "string" },
+        "crNumber": { "type": "string" },
+        "vatNumber": { "type": "string" },
+        "status": { "type": "string", "enum": ["approved", "pending", "suspended", "rejected"] },
+        "rating": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "commissionRate": { "type": "number" },
+        "grossSales": { "type": "number" },
+        "netEarnings": { "type": "number" },
+        "availableBalance": { "type": "number" },
+        "joinedAt": { "type": "string" }
+      },
+      "required": ["id", "nameAr", "nameEn", "status", "commissionRate"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order with line items, VAT calculation, address, payment method, and status timeline",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "subtotal": { "type": "number" },
+        "discountAmount": { "type": "number" },
+        "shippingFee": { "type": "number" },
+        "vatAmount": { "type": "number" },
+        "total": { "type": "number" },
+        "couponCode": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["placed", "confirmed", "preparing", "shipped", "out_for_delivery", "delivered", "cancelled", "return_requested", "returned"]
+        },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "orderNumber", "customerId", "total", "status", "createdAt"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Promotional discount code with percentage or fixed discount, minimum order, and seller scope",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "titleAr": { "type": "string" },
+        "titleEn": { "type": "string" },
+        "type": { "type": "string", "enum": ["percentage", "fixed"] },
+        "value": { "type": "number" },
+        "minOrderAmount": { "type": "number" },
+        "maxDiscount": { "type": "number" },
+        "maxUses": { "type": "number" },
+        "usedCount": { "type": "number" },
+        "sellerId": { "type": "string" },
+        "expiresAt": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "code", "type", "value", "minOrderAmount", "isActive"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Verified customer product review and star rating",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "rating": { "type": "number" },
+        "title": { "type": "string" },
+        "comment": { "type": "string" },
+        "verifiedPurchase": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["approved", "pending", "hidden"] }
+      },
+      "required": ["id", "productId", "userName", "rating", "comment", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role (customer, seller, admin), addresses, wallet balance, loyalty points, and wishlist",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["customer", "seller", "admin"] },
+        "walletBalance": { "type": "number" },
+        "loyaltyPoints": { "type": "number" },
+        "referralCode": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Administrative action audit log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "actionAr": { "type": "string" },
+        "actionEn": { "type": "string" },
+        "targetType": { "type": "string" },
+        "targetId": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "actorName", "actionAr", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "All marketplace products"
+    },
+    "/sellers/{sellerId}": {
+      "schema": { "$ref": "#/entities/Seller" },
+      "description": "All marketplace sellers and vendor applications"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer orders and fulfillment state"
+    },
+    "/coupons/{couponId}": {
+      "schema": { "$ref": "#/entities/Coupon" },
+      "description": "Promotional coupons and seller campaigns"
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/Review" },
+      "description": "Customer product reviews"
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles, addresses, and loyalty wallets"
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Admin and seller audit trail"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Homepage configuration, campaigns, support tickets, and notifications"
+    }
+  }
+}
