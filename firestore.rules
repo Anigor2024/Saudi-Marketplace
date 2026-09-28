@@ -509,13 +509,28 @@ service cloud.firestore {
       allow delete: if isValidId(questionId) && isAdmin();
     }
 
-    // 8. SUPPORT TICKETS: Authenticated customer creates & reads own tickets; Admin reads & manages all
+    // 8. SUPPORT TICKETS: Authenticated customer/seller creates & reads own tickets;
+    // Admin may create tickets for another user (e.g. seller_application_info) and manages all;
+    // Seller payout / return_inspection tickets require an active approved seller account via ownsSellerAccount().
     match /tickets/{ticketId} {
       allow create: if isSignedIn()
         && isValidId(ticketId)
-        && request.resource.data.userId == request.auth.uid
         && isValidString(request.resource.data.subject, 2, 300)
-        && isValidString(request.resource.data.message, 2, 2000);
+        && isValidString(request.resource.data.message, 2, 2000)
+        && (
+          isAdmin()
+          || (
+            request.resource.data.userId == request.auth.uid
+            && request.resource.data.get('workflowType', 'support') != 'seller_application_info'
+            && (
+              (
+                !(request.resource.data.get('workflowType', 'support') in ['payout', 'return_inspection'])
+                && request.resource.data.get('sellerId', '') == ''
+              )
+              || ownsSellerAccount(request.resource.data.get('sellerId', ''))
+            )
+          )
+        );
 
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 

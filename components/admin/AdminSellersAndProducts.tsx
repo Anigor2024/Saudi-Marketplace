@@ -31,19 +31,27 @@ import { Product, ProductStatus, Seller, SellerStatus } from '@/lib/types';
 import { maskIban } from '@/lib/utils';
 
 interface AdminSellersAndProductsProps {
-  section: 'sellers' | 'products';
+  section?: 'sellers' | 'products';
+  activeSection?: 'sellers' | 'products';
 }
 
-export default function AdminSellersAndProducts({ section }: AdminSellersAndProductsProps) {
+export default function AdminSellersAndProducts({
+  section,
+  activeSection,
+}: AdminSellersAndProductsProps) {
+  const effectiveSection = section || activeSection || 'sellers';
   const {
     lang,
     t,
     formatPrice,
     sellers,
+    users,
+    tickets,
     products,
     categories,
-    orders,
+    brands,
     updateSellerStatus,
+    requestSellerApplicationInfo,
     updateSellerCommissionRate,
     toggleSellerVerification,
     moderateProduct,
@@ -57,8 +65,14 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
   const [sellerSearch, setSellerSearch] = useState('');
   const [sellerStatusFilter, setSellerStatusFilter] = useState<'all' | SellerStatus>('all');
   const [sellerCityFilter, setSellerCityFilter] = useState<string>('all');
+  const [sellerCategoryFilter, setSellerCategoryFilter] = useState<string>('all');
+  const [sellerSortBy, setSellerSortBy] = useState<
+    'pending_first' | 'newest' | 'highest_sales' | 'highest_rating' | 'highest_balance'
+  >('pending_first');
   const [inspectingSellerId, setInspectingSellerId] = useState<string | null>(null);
   const [commissionDraft, setCommissionDraft] = useState<number>(10);
+  const [infoRequestSellerId, setInfoRequestSellerId] = useState<string | null>(null);
+  const [infoRequestNote, setInfoRequestNote] = useState<string>('');
 
   const inspectingSeller = useMemo(
     () => sellers.find((s) => s.id === inspectingSellerId) || null,
@@ -83,9 +97,12 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
 
   const filteredSellers = useMemo(() => {
     const q = sellerSearch.trim().toLowerCase();
-    return sellers.filter((s) => {
+    const list = sellers.filter((s) => {
       if (sellerStatusFilter !== 'all' && s.status !== sellerStatusFilter) return false;
       if (sellerCityFilter !== 'all' && s.cityAr !== sellerCityFilter && s.cityEn !== sellerCityFilter) {
+        return false;
+      }
+      if (sellerCategoryFilter !== 'all' && !s.categories.includes(sellerCategoryFilter)) {
         return false;
       }
       if (!q) return true;
@@ -100,11 +117,56 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
         s.cityEn.toLowerCase().includes(q)
       );
     });
-  }, [sellers, sellerSearch, sellerStatusFilter, sellerCityFilter]);
+
+    return [...list].sort((a, b) => {
+      if (sellerSortBy === 'pending_first') {
+        if (a.status === 'pending' && b.status !== 'pending') return -1;
+        if (b.status === 'pending' && a.status !== 'pending') return 1;
+        return b.grossSales - a.grossSales;
+      }
+      if (sellerSortBy === 'newest') {
+        return (b.joinedAt || '').localeCompare(a.joinedAt || '');
+      }
+      if (sellerSortBy === 'highest_sales') {
+        return b.grossSales - a.grossSales;
+      }
+      if (sellerSortBy === 'highest_rating') {
+        return b.rating - a.rating;
+      }
+      if (sellerSortBy === 'highest_balance') {
+        return b.availableBalance - a.availableBalance;
+      }
+      return 0;
+    });
+  }, [
+    sellers,
+    sellerSearch,
+    sellerStatusFilter,
+    sellerCityFilter,
+    sellerCategoryFilter,
+    sellerSortBy,
+  ]);
 
   const openSellerInspector = (seller: Seller) => {
     setInspectingSellerId(seller.id);
     setCommissionDraft(seller.commissionRate);
+  };
+
+  const openInfoRequestModal = (seller: Seller) => {
+    setInfoRequestSellerId(seller.id);
+    setInfoRequestNote(
+      lang === 'ar'
+        ? `يرجى تزويد فريق التوثيق بنسخة محدثة من السجل التجاري (${seller.crNumber}) وشهادة التسجيل في ضريبة القيمة المضافة وخطاب الآيبان البنكي المصادق لاستكمال اعتماد متجر «${seller.nameAr}».`
+        : `Please provide an updated copy of Commercial Registration (${seller.crNumber}), active ZATCA VAT certificate, and stamped bank IBAN letter to complete approval for "${seller.nameEn}".`
+    );
+  };
+
+  const handleConfirmInfoRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!infoRequestSellerId) return;
+    await requestSellerApplicationInfo(infoRequestSellerId, infoRequestNote);
+    setInfoRequestSellerId(null);
+    setInfoRequestNote('');
   };
 
   // ============================================================================
@@ -113,9 +175,13 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
   const [productSearch, setProductSearch] = useState('');
   const [productStatusFilter, setProductStatusFilter] = useState<'all' | ProductStatus>('all');
   const [productCategoryFilter, setProductCategoryFilter] = useState<string>('all');
+  const [productBrandFilter, setProductBrandFilter] = useState<string>('all');
   const [productSellerFilter, setProductSellerFilter] = useState<string>('all');
+  const [productStockFilter, setProductStockFilter] = useState<
+    'all' | 'healthy' | 'low' | 'critical' | 'out_of_stock'
+  >('all');
   const [productFlagFilter, setProductFlagFilter] = useState<
-    'all' | 'featured' | 'trending' | 'best_seller' | 'flash_deal' | 'seasonal' | 'critical_stock'
+    'all' | 'featured' | 'trending' | 'best_seller' | 'new_arrival' | 'flash_deal' | 'seasonal'
   >('all');
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [moderatingProductId, setModeratingProductId] = useState<string | null>(null);
@@ -129,6 +195,7 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
   const [modFeatured, setModFeatured] = useState<boolean>(false);
   const [modTrending, setModTrending] = useState<boolean>(false);
   const [modBestSeller, setModBestSeller] = useState<boolean>(false);
+  const [modNewArrival, setModNewArrival] = useState<boolean>(false);
   const [modFlashDeal, setModFlashDeal] = useState<boolean>(false);
   const [modSeasonal, setModSeasonal] = useState<boolean>(false);
   const [modReason, setModReason] = useState<string>('');
@@ -148,6 +215,7 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
     setModFeatured(Boolean(prod.isFeatured));
     setModTrending(Boolean(prod.isTrending));
     setModBestSeller(Boolean(prod.isBestSeller));
+    setModNewArrival(Boolean(prod.isNewArrival));
     setModFlashDeal(Boolean(prod.isFlashDeal));
     setModSeasonal(Boolean(prod.isSeasonal));
     setModReason('');
@@ -179,6 +247,7 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
         isFeatured: modFeatured,
         isTrending: modTrending,
         isBestSeller: modBestSeller,
+        isNewArrival: modNewArrival,
         isFlashDeal: modFlashDeal,
         isSeasonal: modSeasonal,
       },
@@ -213,19 +282,31 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
     return products.filter((p) => {
       if (productStatusFilter !== 'all' && p.status !== productStatusFilter) return false;
       if (productCategoryFilter !== 'all' && p.categoryId !== productCategoryFilter) return false;
+      if (productBrandFilter !== 'all' && p.brandId !== productBrandFilter) return false;
       if (productSellerFilter !== 'all' && p.sellerId !== productSellerFilter) return false;
 
+      // Separate Stock Health Filter (never mixed with merchandising flags)
+      if (productStockFilter !== 'all') {
+        const threshold = p.lowStockThreshold || 5;
+        const criticalLimit = Math.max(1, Math.floor(threshold / 2));
+        const isOut = p.stock <= 0 || p.status === 'out_of_stock';
+        const isCritical = !isOut && p.stock > 0 && p.stock <= criticalLimit;
+        const isLow = !isOut && p.stock > criticalLimit && p.stock <= threshold;
+        const isHealthy = !isOut && p.stock > threshold;
+
+        if (productStockFilter === 'out_of_stock' && !isOut) return false;
+        if (productStockFilter === 'critical' && !isCritical) return false;
+        if (productStockFilter === 'low' && !isLow) return false;
+        if (productStockFilter === 'healthy' && !isHealthy) return false;
+      }
+
+      // Merchandising Flag Filter
       if (productFlagFilter === 'featured' && !p.isFeatured) return false;
       if (productFlagFilter === 'trending' && !p.isTrending) return false;
       if (productFlagFilter === 'best_seller' && !p.isBestSeller) return false;
+      if (productFlagFilter === 'new_arrival' && !p.isNewArrival) return false;
       if (productFlagFilter === 'flash_deal' && !p.isFlashDeal) return false;
       if (productFlagFilter === 'seasonal' && !p.isSeasonal) return false;
-      if (
-        productFlagFilter === 'critical_stock' &&
-        !(p.stock <= p.lowStockThreshold || p.status === 'out_of_stock')
-      ) {
-        return false;
-      }
 
       if (!q) return true;
       return (
@@ -243,7 +324,9 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
     productSearch,
     productStatusFilter,
     productCategoryFilter,
+    productBrandFilter,
     productSellerFilter,
+    productStockFilter,
     productFlagFilter,
   ]);
 
@@ -273,7 +356,7 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
   // ============================================================================
   // RENDER: SELLERS GOVERNANCE
   // ============================================================================
-  if (section === 'sellers') {
+  if (effectiveSection === 'sellers') {
     return (
       <div className="space-y-6">
         {/* Section Header */}
@@ -402,12 +485,26 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 flex-1 justify-end">
+          <div className="flex flex-wrap items-center gap-2.5 flex-1 justify-end">
+            <select
+              value={sellerCategoryFilter}
+              onChange={(e) => setSellerCategoryFilter(e.target.value)}
+              aria-label={t('تصفية حسب القسم', 'Filter by Category')}
+              className="px-3 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
+            >
+              <option value="all">{t('جميع الأقسام', 'All Categories')}</option>
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {lang === 'ar' ? cat.nameAr : cat.nameEn}
+                </option>
+              ))}
+            </select>
+
             <select
               value={sellerCityFilter}
               onChange={(e) => setSellerCityFilter(e.target.value)}
               aria-label={t('تصفية حسب المدينة', 'Filter by City')}
-              className="px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
+              className="px-3 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
             >
               <option value="all">{t('جميع المدن', 'All Cities')}</option>
               <option value="الرياض">{t('الرياض', 'Riyadh')}</option>
@@ -417,7 +514,39 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
               <option value="بريدة">{t('بريدة', 'Buraidah')}</option>
             </select>
 
-            <div className="relative min-w-[260px] flex-1 max-w-md">
+            <select
+              value={sellerSortBy}
+              onChange={(e) =>
+                setSellerSortBy(
+                  e.target.value as
+                    | 'pending_first'
+                    | 'newest'
+                    | 'highest_sales'
+                    | 'highest_rating'
+                    | 'highest_balance'
+                )
+              }
+              aria-label={t('ترتيب المتاجر', 'Sort Sellers')}
+              className="px-3 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
+            >
+              <option value="pending_first">
+                {t('الترتيب: طلبات الاعتماد أولاً', 'Sort: Pending First')}
+              </option>
+              <option value="newest">
+                {t('الترتيب: الأحدث انضماماً', 'Sort: Newest')}
+              </option>
+              <option value="highest_sales">
+                {t('الترتيب: الأعلى مبيعات', 'Sort: Highest Sales')}
+              </option>
+              <option value="highest_rating">
+                {t('الترتيب: الأعلى تقييماً', 'Sort: Highest Rating')}
+              </option>
+              <option value="highest_balance">
+                {t('الترتيب: الأعلى رصيداً متاحاً', 'Sort: Highest Available Balance')}
+              </option>
+            </select>
+
+            <div className="relative min-w-[240px] flex-1 max-w-md">
               <Search className="w-4 h-4 text-[#8C857B] absolute top-1/2 -translate-y-1/2 start-3.5" />
               <input
                 type="text"
@@ -555,13 +684,22 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
                               </button>
                             )}
                             {seller.status === 'pending' && (
-                              <button
-                                type="button"
-                                onClick={() => updateSellerStatus(seller.id, 'rejected')}
-                                className="px-2.5 py-1.5 rounded-lg border border-[#9E2A2B]/40 text-[#9E2A2B] text-[11px] font-bold hover:bg-red-50 whitespace-nowrap"
-                              >
-                                {t('رفض', 'Reject')}
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => openInfoRequestModal(seller)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-[#C59B27] bg-[#FBF7EC] text-[#141413] text-[11px] font-bold hover:bg-[#F5E6C8]/60 whitespace-nowrap"
+                                >
+                                  {t('طلب استكمال بيانات', 'Request More Info')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => updateSellerStatus(seller.id, 'rejected')}
+                                  className="px-2.5 py-1.5 rounded-lg border border-[#9E2A2B]/40 text-[#9E2A2B] text-[11px] font-bold hover:bg-red-50 whitespace-nowrap"
+                                >
+                                  {t('رفض', 'Reject')}
+                                </button>
+                              </>
                             )}
                             {seller.status === 'approved' && (
                               <button
@@ -636,6 +774,22 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
                   <div className="flex justify-between">
                     <span className="text-[#57534E]">{t('تاريخ الانضمام:', 'Joined Date:')}</span>
                     <span className="font-mono text-[#141413]">{inspectingSeller.joinedAt}</span>
+                  </div>
+                  <div className="flex justify-between pt-1 border-t border-[#E6E0D6]">
+                    <span className="text-[#57534E]">{t('حساب المستخدم المرتبط:', 'Linked User Account:')}</span>
+                    <span
+                      className={`font-mono font-bold ${
+                        inspectingSeller.applicantUserId &&
+                        users.some((u) => u.id === inspectingSeller.applicantUserId)
+                          ? 'text-[#1B6B45]'
+                          : 'text-[#9E2A2B]'
+                      }`}
+                    >
+                      {inspectingSeller.applicantUserId &&
+                      users.some((u) => u.id === inspectingSeller.applicantUserId)
+                        ? inspectingSeller.applicantUserId
+                        : t('غير مرتبط بحساب صالح', 'Unlinked Legacy Record')}
+                    </span>
                   </div>
                 </div>
 
@@ -749,13 +903,22 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
                     {t('إيقاف المتجر مؤقتاً', 'Suspend Boutique')}
                   </button>
                   {inspectingSeller.status === 'pending' && (
-                    <button
-                      type="button"
-                      onClick={() => updateSellerStatus(inspectingSeller.id, 'rejected')}
-                      className="px-4 py-2 rounded-xl bg-red-50 text-[#9E2A2B] text-xs font-bold hover:bg-red-100 whitespace-nowrap"
-                    >
-                      {t('رفض طلب الانضمام', 'Reject Application')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => openInfoRequestModal(inspectingSeller)}
+                        className="px-4 py-2 rounded-xl border border-[#C59B27] bg-[#FBF7EC] text-[#141413] text-xs font-bold hover:bg-[#F5E6C8]/60 whitespace-nowrap"
+                      >
+                        {t('طلب استكمال بيانات ومستندات', 'Request More Information')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateSellerStatus(inspectingSeller.id, 'rejected')}
+                        className="px-4 py-2 rounded-xl bg-red-50 text-[#9E2A2B] text-xs font-bold hover:bg-red-100 whitespace-nowrap"
+                      >
+                        {t('رفض طلب الانضمام', 'Reject Application')}
+                      </button>
+                    </>
                   )}
                 </div>
 
@@ -768,6 +931,70 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Request More Information Modal for Pending Seller Application */}
+        {infoRequestSellerId && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <form
+              onSubmit={handleConfirmInfoRequest}
+              className="bg-white rounded-2xl border border-[#E6E0D6] max-w-lg w-full p-6 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-3 border-b border-[#E6E0D6] pb-3">
+                <div>
+                  <div className="text-xs font-bold text-[#B7791F]">
+                    {t('استكمال مسوغات التوثيق (seller_application_info)', 'Onboarding Verification Request')}
+                  </div>
+                  <h3 className="text-base font-bold text-[#141413] mt-0.5">
+                    {t('إرسال طلب معلومات أو مستندات إضافية لمقدم الطلب', 'Request Additional Information from Applicant')}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInfoRequestSellerId(null)}
+                  className="p-1.5 rounded-lg text-[#8C857B] hover:text-[#141413]"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="text-xs text-[#57534E]">
+                {t(
+                  'سيتم إنشاء تذكرة رسمية موجهة مباشرة إلى حساب المستخدم مقدم الطلب (applicantUserId) بنوع workflowType = seller_application_info.',
+                  'Creates an official Admin-originated ticket addressed to the applicant user account (workflowType = seller_application_info).'
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#141413] mb-1.5">
+                  {t('تفاصيل المستندات أو الإيضاحات المطلوبة', 'Required Documents / Clarification Details')}
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  value={infoRequestNote}
+                  onChange={(e) => setInfoRequestNote(e.target.value)}
+                  className="w-full p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs text-[#141413] focus:outline-none focus:border-[#0B4F3F]"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E6E0D6]">
+                <button
+                  type="button"
+                  onClick={() => setInfoRequestSellerId(null)}
+                  className="px-4 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-bold text-[#141413]"
+                >
+                  {t('إلغاء', 'Cancel')}
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold hover:bg-[#083D30]"
+                >
+                  {t('إرسال طلب استكمال البيانات', 'Send Information Request')}
+                </button>
+              </div>
+            </form>
           </div>
         )}
       </div>
@@ -860,16 +1087,16 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
             ))}
           </div>
 
-          {/* Merchandising / Risk Flag Filter */}
+          {/* Merchandising Flag Filter (strictly merchandising, separated from stock health) */}
           <div className="flex flex-wrap items-center gap-1.5">
             {(
               [
-                { id: 'all', labelAr: 'كل التصنيفات التسويقية', labelEn: 'All Flags' },
+                { id: 'all', labelAr: 'كل الشارات التسويقية', labelEn: 'All Merch Flags' },
                 { id: 'featured', labelAr: 'مختارات أثيل', labelEn: 'Featured' },
                 { id: 'best_seller', labelAr: 'الأكثر مبيعاً', labelEn: 'Best Seller' },
+                { id: 'new_arrival', labelAr: 'وصل حديثاً', labelEn: 'New Arrival' },
                 { id: 'flash_deal', labelAr: 'عرض خاطف', labelEn: 'Flash Deal' },
                 { id: 'seasonal', labelAr: 'موسمي', labelEn: 'Seasonal' },
-                { id: 'critical_stock', labelAr: 'تنبيهات المخزون', labelEn: 'Stock Alerts' },
               ] as const
             ).map((f) => (
               <button
@@ -888,6 +1115,37 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
           </div>
         </div>
 
+        {/* Dedicated Stock Health Filter Row (Healthy / Low / Critical / Out of Stock) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#F3EFEA]">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-bold text-[#57534E] me-1">
+              {t('حالة المخزون:', 'Stock Level:')}
+            </span>
+            {(
+              [
+                { id: 'all', labelAr: 'كل مستويات المخزون', labelEn: 'All Stock Levels' },
+                { id: 'healthy', labelAr: 'متوفر (Healthy)', labelEn: 'Healthy' },
+                { id: 'low', labelAr: 'منخفض (Low)', labelEn: 'Low' },
+                { id: 'critical', labelAr: 'حرج (Critical)', labelEn: 'Critical' },
+                { id: 'out_of_stock', labelAr: 'نفد من المخزون (Out of Stock)', labelEn: 'Out of Stock' },
+              ] as const
+            ).map((st) => (
+              <button
+                key={st.id}
+                type="button"
+                onClick={() => setProductStockFilter(st.id)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors whitespace-nowrap ${
+                  productStockFilter === st.id
+                    ? 'bg-[#0B4F3F] border-[#0B4F3F] text-white'
+                    : 'bg-[#FAF8F5] border-[#E6E0D6] text-[#57534E] hover:text-[#141413]'
+                }`}
+              >
+                {t(st.labelAr, st.labelEn)}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#F3EFEA]">
           <div className="flex flex-wrap items-center gap-2.5">
             <select
@@ -900,6 +1158,20 @@ export default function AdminSellersAndProducts({ section }: AdminSellersAndProd
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
                   {lang === 'ar' ? c.nameAr : c.nameEn}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={productBrandFilter}
+              onChange={(e) => setProductBrandFilter(e.target.value)}
+              aria-label={t('تصفية حسب الماركة', 'Filter by Brand')}
+              className="px-3 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
+            >
+              <option value="all">{t('جميع الماركات العالمية والمحلية', 'All Brands')}</option>
+              {brands.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {lang === 'ar' ? b.nameAr : b.nameEn}
                 </option>
               ))}
             </select>

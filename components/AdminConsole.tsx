@@ -30,9 +30,9 @@ import {
   Filter,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
-import { AdminSellersAndProducts } from '@/components/admin/AdminSellersAndProducts';
-import { AdminOrdersReturnsCustomers } from '@/components/admin/AdminOrdersReturnsCustomers';
-import { AdminPromotionsSupportModeration } from '@/components/admin/AdminPromotionsSupportModeration';
+import AdminSellersAndProducts from '@/components/admin/AdminSellersAndProducts';
+import AdminOrdersReturnsCustomers from '@/components/admin/AdminOrdersReturnsCustomers';
+import AdminPromotionsSupportModeration from '@/components/admin/AdminPromotionsSupportModeration';
 
 export type AdminSectionId =
   | 'overview'
@@ -94,27 +94,32 @@ export function AdminConsole() {
       });
     });
 
-    const activeSellers = sellers.filter(
-      (s) => (s.status || (s.verified ? 'approved' : 'pending')) === 'approved'
-    );
-    const pendingSellers = sellers.filter(
-      (s) => (s.status || (s.verified ? 'approved' : 'pending')) === 'pending'
-    );
+    const activeSellers = sellers.filter((s) => s.status === 'approved');
+    const pendingSellers = sellers.filter((s) => s.status === 'pending');
     const suspendedSellers = sellers.filter((s) => s.status === 'suspended');
 
-    const activeProducts = products.filter(
-      (p) => !p.moderationStatus || p.moderationStatus === 'approved'
-    );
-    const pendingProducts = products.filter(
-      (p) => p.moderationStatus === 'pending' || p.moderationStatus === 'flagged'
-    );
+    const activeProducts = products.filter((p) => p.status === 'active');
+    const pendingProducts = products.filter((p) => p.status === 'suspended');
     const lowOrOutStockProducts = products.filter(
       (p) => p.stock <= (p.lowStockThreshold ?? 5) || p.status === 'out_of_stock'
     );
 
     const openReturns = orders.filter(
-      (o) => o.returnRequest?.status === 'requested' || o.status === 'return_requested'
+      (o) => o.returnRequest?.status === 'pending' || o.status === 'return_requested'
     );
+    const totalReturnOrdersCount = orders.filter(
+      (o) =>
+        o.status === 'return_requested' ||
+        o.status === 'returned' ||
+        Boolean(o.returnRequest)
+    ).length;
+
+    const averageOrderValue =
+      validOrders.length > 0 ? Math.round(gmv / validOrders.length) : 0;
+    const returnRate =
+      orders.length > 0
+        ? Number(((totalReturnOrdersCount / orders.length) * 100).toFixed(1))
+        : 0;
 
     const openTickets = tickets.filter(
       (tk) => tk.status === 'open' || tk.status === 'in_progress'
@@ -134,6 +139,9 @@ export function AdminConsole() {
     return {
       gmv,
       estimatedCommission,
+      averageOrderValue,
+      returnRate,
+      totalReturnOrdersCount,
       totalOrders: orders.length,
       validOrdersCount: validOrders.length,
       activeSellersCount: activeSellers.length,
@@ -186,14 +194,14 @@ export function AdminConsole() {
       items.push({
         id: `q-prod-${p.id}`,
         category: 'products',
-        urgency: p.moderationStatus === 'flagged' ? 'critical' : 'high',
+        urgency: p.status === 'suspended' ? 'critical' : 'high',
         titleAr:
-          p.moderationStatus === 'flagged'
-            ? `منتج مُبلّغ للمراجعة: ${p.titleAr}`
+          p.status === 'suspended'
+            ? `منتج موقوف للمراجعة: ${p.titleAr}`
             : `منتج بانتظار الاعتماد: ${p.titleAr}`,
         titleEn:
-          p.moderationStatus === 'flagged'
-            ? `Flagged Product: ${p.titleEn}`
+          p.status === 'suspended'
+            ? `Suspended Product: ${p.titleEn}`
             : `Pending Product Approval: ${p.titleEn}`,
         subtitleAr: `${p.sellerNameAr} · ${formatPrice(p.price)}`,
         subtitleEn: `${p.sellerNameEn} · ${formatPrice(p.price)}`,
@@ -241,8 +249,8 @@ export function AdminConsole() {
         id: `q-rev-${r.id}`,
         category: 'moderation',
         urgency: 'medium',
-        titleAr: `مراجعة عميل بانتظار التدقيق: ${r.titleAr}`,
-        titleEn: `Pending Customer Review: ${r.titleEn}`,
+        titleAr: `مراجعة عميل بانتظار التدقيق: ${r.title}`,
+        titleEn: `Pending Customer Review: ${r.title}`,
         subtitleAr: `${r.userName} · التقييم: ${r.rating}/5`,
         subtitleEn: `${r.userName} · Rating: ${r.rating}/5`,
         meta: r.verifiedPurchase ? 'Verified' : 'Unverified',
@@ -642,7 +650,7 @@ export function AdminConsole() {
             {activeSection === 'overview' && (
               <div className="space-y-6">
                 {/* Executive KPI Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                   <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 shadow-xs">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-[#8C857B]">
@@ -657,6 +665,44 @@ export function AdminConsole() {
                       {t('صافي عمولة المنصة المقدرة:', 'Est. Net Commission:')}{' '}
                       <span className="font-mono font-bold text-[#0B4F3F]">
                         {formatPrice(Math.round(metrics.estimatedCommission))}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 shadow-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#8C857B]">
+                        {t('متوسط قيمة الطلب (AOV)', 'Average Order Value (AOV)')}
+                      </span>
+                      <Landmark className="w-4 h-4 text-[#C59B27]" />
+                    </div>
+                    <div className="text-2xl font-bold font-mono text-[#141413] mt-2">
+                      {formatPrice(metrics.averageOrderValue)}
+                    </div>
+                    <div className="text-[11px] text-[#57534E] mt-1">
+                      {t('محسوب من الطلبات المؤكدة:', 'Across valid orders:')}{' '}
+                      <span className="font-mono font-bold text-[#0B4F3F]">
+                        {metrics.validOrdersCount}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-[#E6E0D6] p-5 shadow-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#8C857B]">
+                        {t('معدل المرتجعات (Return Rate)', 'Platform Return Rate')}
+                      </span>
+                      <RotateCcw className="w-4 h-4 text-[#9E2A2B]" />
+                    </div>
+                    <div className="text-2xl font-bold font-mono text-[#141413] mt-2">
+                      {metrics.returnRate}%
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] mt-1">
+                      <span className="text-[#57534E]">
+                        {t('إجمالي طلبات الإرجاع:', 'Total return claims:')}
+                      </span>
+                      <span className="font-mono font-bold text-[#9E2A2B]">
+                        {metrics.totalReturnOrdersCount} / {metrics.totalOrders}
                       </span>
                     </div>
                   </div>
@@ -932,7 +978,7 @@ export function AdminConsole() {
                             </span>
                           </div>
                           <p className="text-[11px] text-[#57534E] line-clamp-1">
-                            {lang === 'ar' ? log.detailsAr : log.detailsEn}
+                            {log.targetType}: #{log.targetId}
                           </p>
                           <div className="text-[10px] font-mono text-[#8C857B]">
                             {log.actorName} · {log.createdAt.slice(0, 16).replace('T', ' ')}
@@ -1060,7 +1106,14 @@ export function AdminConsole() {
                           {item.category === 'products' && (
                             <button
                               type="button"
-                              onClick={() => moderateProduct(item.entityId, 'approved')}
+                              onClick={() =>
+                                moderateProduct(
+                                  item.entityId,
+                                  { status: 'active' },
+                                  `اعتماد وتفعيل المنتج (${item.entityId}) من طابور العمليات`,
+                                  `Approved and activated product (${item.entityId}) from Operations Queue`
+                                )
+                              }
                               className="px-3 py-1.5 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold hover:bg-[#093D30]"
                             >
                               {t('اعتماد المنتج', 'Approve Product')}
@@ -1143,7 +1196,7 @@ export function AdminConsole() {
                           </span>
                         </div>
                         <p className="text-[#57534E]">
-                          {lang === 'ar' ? log.detailsAr : log.detailsEn}
+                          {log.targetType}: #{log.targetId}
                         </p>
                       </div>
                       <div className="text-end font-mono text-[11px] text-[#8C857B]">

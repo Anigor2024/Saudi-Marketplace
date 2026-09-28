@@ -22,12 +22,15 @@ import { useMarketplace } from '@/context/MarketplaceContext';
 import { Order, OrderStatus, UserProfile } from '@/lib/types';
 
 interface AdminOrdersReturnsCustomersProps {
-  section: 'orders' | 'returns' | 'customers';
+  section?: 'orders' | 'returns' | 'customers';
+  activeSection?: 'orders' | 'returns' | 'customers';
 }
 
 export default function AdminOrdersReturnsCustomers({
   section,
+  activeSection,
 }: AdminOrdersReturnsCustomersProps) {
+  const effectiveSection = section || activeSection || 'orders';
   const {
     lang,
     t,
@@ -35,6 +38,7 @@ export default function AdminOrdersReturnsCustomers({
     orders,
     sellers,
     users,
+    tickets,
     updateOrderStatus,
     cancelOrder,
     processReturnRequest,
@@ -48,6 +52,8 @@ export default function AdminOrdersReturnsCustomers({
   const [orderStatusFilter, setOrderStatusFilter] = useState<'all' | OrderStatus>('all');
   const [orderSellerFilter, setOrderSellerFilter] = useState<string>('all');
   const [orderPaymentFilter, setOrderPaymentFilter] = useState<string>('all');
+  const [orderFromDate, setOrderFromDate] = useState<string>('');
+  const [orderToDate, setOrderToDate] = useState<string>('');
   const [inspectingOrderId, setInspectingOrderId] = useState<string | null>(null);
 
   const [overrideStatus, setOverrideStatus] = useState<OrderStatus>('confirmed');
@@ -136,6 +142,9 @@ export default function AdminOrdersReturnsCustomers({
         return false;
       }
       if (orderPaymentFilter !== 'all' && o.paymentMethod !== orderPaymentFilter) return false;
+      const orderDateStr = o.createdAt.slice(0, 10);
+      if (orderFromDate && orderDateStr < orderFromDate) return false;
+      if (orderToDate && orderDateStr > orderToDate) return false;
       if (!q) return true;
       return (
         o.orderNumber.toLowerCase().includes(q) ||
@@ -147,7 +156,15 @@ export default function AdminOrdersReturnsCustomers({
         o.address.cityEn.toLowerCase().includes(q)
       );
     });
-  }, [orders, orderSearch, orderStatusFilter, orderSellerFilter, orderPaymentFilter]);
+  }, [
+    orders,
+    orderSearch,
+    orderStatusFilter,
+    orderSellerFilter,
+    orderPaymentFilter,
+    orderFromDate,
+    orderToDate,
+  ]);
 
   // ============================================================================
   // 2. RETURNS & REFUNDS ADJUDICATION STATE
@@ -274,7 +291,7 @@ export default function AdminOrdersReturnsCustomers({
   // ============================================================================
   // RENDER 1: ORDERS SUPERVISION
   // ============================================================================
-  if (section === 'orders') {
+  if (effectiveSection === 'orders') {
     return (
       <div className="space-y-6">
         <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 flex flex-wrap items-center justify-between gap-4">
@@ -390,6 +407,43 @@ export default function AdminOrdersReturnsCustomers({
                 <option value="wallet">ATHEEL WALLET</option>
                 <option value="cod">COD</option>
               </select>
+
+              <div className="flex items-center gap-1.5 bg-[#FAF8F5] border border-[#E6E0D6] rounded-xl px-2.5 py-1.5 text-xs">
+                <span className="text-[#8C857B] font-semibold">
+                  {t('من تاريخ:', 'From Date:')}
+                </span>
+                <input
+                  type="date"
+                  value={orderFromDate}
+                  onChange={(e) => setOrderFromDate(e.target.value)}
+                  className="bg-transparent font-mono text-xs text-[#141413] focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-[#FAF8F5] border border-[#E6E0D6] rounded-xl px-2.5 py-1.5 text-xs">
+                <span className="text-[#8C857B] font-semibold">
+                  {t('إلى تاريخ:', 'To Date:')}
+                </span>
+                <input
+                  type="date"
+                  value={orderToDate}
+                  onChange={(e) => setOrderToDate(e.target.value)}
+                  className="bg-transparent font-mono text-xs text-[#141413] focus:outline-none"
+                />
+              </div>
+
+              {(orderFromDate || orderToDate) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOrderFromDate('');
+                    setOrderToDate('');
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-white border border-[#E6E0D6] text-[11px] font-bold text-[#9E2A2B] hover:bg-red-50"
+                >
+                  {t('مسح التاريخ', 'Clear Dates')}
+                </button>
+              )}
             </div>
 
             <div className="relative min-w-[260px] flex-1 max-w-md">
@@ -735,7 +789,7 @@ export default function AdminOrdersReturnsCustomers({
   // ============================================================================
   // RENDER 2: RETURNS & REFUNDS ADJUDICATION
   // ============================================================================
-  if (section === 'returns') {
+  if (effectiveSection === 'returns') {
     return (
       <div className="space-y-6">
         <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6">
@@ -819,6 +873,18 @@ export default function AdminOrdersReturnsCustomers({
               const req = order.returnRequest;
               const reqStatus = req?.status || (order.status === 'returned' ? 'approved' : 'pending');
               const noteDraft = returnAdminNotes[order.id] ?? req?.adminNote ?? '';
+              const inspectionTicket = tickets.find(
+                (tkt) =>
+                  (tkt.workflowType === 'return_inspection' || Boolean(tkt.returnRecommendation)) &&
+                  (tkt.relatedOrderId === order.id ||
+                    tkt.orderId === order.id ||
+                    tkt.orderNumber === order.orderNumber)
+              );
+              const effectiveRecommendation =
+                req?.sellerRecommendation || inspectionTicket?.returnRecommendation;
+              const effectiveInspectionNote =
+                req?.sellerInspectionNote || inspectionTicket?.message;
+              const effectiveRefundStatus = req?.refundStatus || 'none';
 
               return (
                 <div
@@ -827,7 +893,7 @@ export default function AdminOrdersReturnsCustomers({
                 >
                   <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#F3EFEA] pb-4">
                     <div>
-                      <div className="flex items-center gap-2.5 text-xs">
+                      <div className="flex flex-wrap items-center gap-2.5 text-xs">
                         <span className="font-mono font-bold text-sm text-[#141413]">
                           #{order.orderNumber}
                         </span>
@@ -842,14 +908,39 @@ export default function AdminOrdersReturnsCustomers({
                           }`}
                         >
                           {reqStatus === 'approved'
-                            ? t('تمت الموافقة وإصدار الاسترداد', 'Approved & Refunded')
+                            ? t('تمت الموافقة على الإرجاع', 'Return Approved')
                             : reqStatus === 'rejected'
                             ? t('تم رفض طلب الإرجاع', 'Return Declined')
                             : t('قيد المراجعة والفصل الإداري', 'Pending Admin Adjudication')}
                         </span>
+
+                        {effectiveRefundStatus === 'wallet_completed' && (
+                          <span className="px-2.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[#1B6B45] text-[11px] font-bold">
+                            {t(
+                              `تم إيداع الاسترداد في المحفظة (${formatPrice(req?.refundAmount || order.total)})`,
+                              `Wallet Refund Completed (${formatPrice(req?.refundAmount || order.total)})`
+                            )}
+                          </span>
+                        )}
+
+                        {effectiveRefundStatus === 'external_authorized_pending' && (
+                          <span className="px-2.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-[#B45309] text-[11px] font-bold">
+                            {t(
+                              'تم اعتماد الاسترداد — بانتظار التسوية عبر بوابة الدفع',
+                              'Refund Authorized — External Gateway Settlement Required'
+                            )}
+                          </span>
+                        )}
+
+                        {effectiveRefundStatus === 'failed' && (
+                          <span className="px-2.5 py-0.5 rounded bg-red-50 border border-red-200 text-[#9E2A2B] text-[11px] font-bold">
+                            {t('تعذر تنفيذ الاسترداد (Failed)', 'Refund Failed')}
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-[#57534E] mt-1">
-                        {t('العميل:', 'Customer:')} <span className="font-bold text-[#141413]">{order.customerName}</span> ({order.customerPhone}) ·{' '}
+                        {t('العميل:', 'Customer:')}{' '}
+                        <span className="font-bold text-[#141413]">{order.customerName}</span> ({order.customerPhone}) ·{' '}
                         {t('وسيلة الاسترداد المفضلة:', 'Refund Method:')}{' '}
                         <span className="font-bold text-[#0B4F3F]">
                           {req?.refundMethod === 'wallet'
@@ -862,8 +953,15 @@ export default function AdminOrdersReturnsCustomers({
                     <div className="text-end font-mono tabular-nums">
                       <div className="text-lg font-bold text-[#0B4F3F]">{formatPrice(order.total)}</div>
                       <div className="text-[11px] text-[#8C857B]">
-                        {t('تاريخ المطالبة:', 'Requested:')} {req?.requestedAt?.split('T')[0] || order.updatedAt.split('T')[0]}
+                        {t('تاريخ المطالبة:', 'Requested:')}{' '}
+                        {req?.requestedAt?.split('T')[0] || order.updatedAt.split('T')[0]}
                       </div>
+                      {req?.refundUpdatedAt && (
+                        <div className="text-[10px] text-[#57534E]">
+                          {t('آخر تحديث للاسترداد:', 'Refund Updated:')}{' '}
+                          {req.refundUpdatedAt.split('T')[0]}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -880,20 +978,46 @@ export default function AdminOrdersReturnsCustomers({
                     </div>
 
                     <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-2">
-                      <div className="font-bold text-[#141413]">
-                        {t('تقرير الفحص الفني من المتجر (Merchant Inspection)', 'Merchant Technical Inspection Report')}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-bold text-[#141413]">
+                          {t(
+                            'تقرير الفحص الفني من المتجر (return_inspection)',
+                            'Merchant Technical Inspection Report (return_inspection)'
+                          )}
+                        </div>
+                        {inspectionTicket && (
+                          <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                            <span className="px-2 py-0.5 rounded bg-white border border-[#E6E0D6] font-bold text-[#0B4F3F]">
+                              #{inspectionTicket.ticketNumber}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] font-bold uppercase">
+                              {inspectionTicket.status}
+                            </span>
+                            <span className="text-[#8C857B]">{inspectionTicket.createdAt}</span>
+                          </div>
+                        )}
                       </div>
-                      {req?.sellerRecommendation ? (
+                      {effectiveRecommendation ? (
                         <>
                           <div className="text-xs font-bold text-[#0B4F3F]">
-                            {req.sellerRecommendation === 'approve_restock'
-                              ? t('توصية المتجر: الموافقة وإعادة القطعة للمخزون', 'Recommendation: Approve & Restock')
-                              : req.sellerRecommendation === 'inspect_required'
-                              ? t('توصية المتجر: يتطلب فحصاً معمقاً للأختام', 'Recommendation: Deep Physical Inspection Required')
-                              : t('توصية المتجر: اعتراض لعدم مطابقة شروط الإرجاع', 'Recommendation: Dispute Return Claim')}
+                            {effectiveRecommendation === 'approve_restock'
+                              ? t(
+                                  'توصية المتجر: الموافقة وإعادة القطعة للمخزون (approve_restock)',
+                                  'Recommendation: Approve & Restock (approve_restock)'
+                                )
+                              : effectiveRecommendation === 'inspect_required'
+                              ? t(
+                                  'توصية المتجر: يتطلب فحصاً معمقاً للأختام (inspect_required)',
+                                  'Recommendation: Deep Physical Inspection Required (inspect_required)'
+                                )
+                              : t(
+                                  'توصية المتجر: اعتراض لعدم مطابقة شروط الإرجاع (dispute)',
+                                  'Recommendation: Dispute Return Claim (dispute)'
+                                )}
                           </div>
                           <p className="text-[#57534E] leading-relaxed">
-                            {req.sellerInspectionNote || t('تم إرفاق توصية المتجر.', 'Merchant recommendation recorded.')}
+                            {effectiveInspectionNote ||
+                              t('تم إرفاق توصية المتجر.', 'Merchant recommendation recorded.')}
                           </p>
                         </>
                       ) : (
@@ -912,6 +1036,7 @@ export default function AdminOrdersReturnsCustomers({
                     <input
                       type="text"
                       value={noteDraft}
+                      disabled={reqStatus !== 'pending'}
                       onChange={(e) =>
                         setReturnAdminNotes((prev) => ({ ...prev, [order.id]: e.target.value }))
                       }
@@ -919,46 +1044,54 @@ export default function AdminOrdersReturnsCustomers({
                         'اكتب ملاحظة القرار الإداري وحيثيات التسوية للعميل والمتجر...',
                         'Enter official administrative decision note for customer & seller...'
                       )}
-                      className="flex-1 min-w-[260px] px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs text-[#141413]"
+                      className="flex-1 min-w-[260px] px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs text-[#141413] disabled:opacity-60"
                     />
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          processReturnRequest(
-                            order.id,
-                            true,
-                            noteDraft.trim() ||
-                              t(
-                                'تمت الموافقة على الإرجاع بعد التحقق من سلامة المنتج وإيداع المبلغ',
-                                'Approved return and issued full refund'
-                              )
-                          )
-                        }
-                        className="px-4 py-2 rounded-xl bg-[#1B6B45] text-white text-xs font-bold hover:bg-[#145335] whitespace-nowrap"
-                      >
-                        {t('اعتماد الإرجاع واسترداد المبلغ', 'Approve Return & Refund')}
-                      </button>
+                    {reqStatus === 'pending' ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            processReturnRequest(
+                              order.id,
+                              true,
+                              noteDraft.trim() ||
+                                t(
+                                  'تمت الموافقة على الإرجاع بعد التحقق من سلامة المنتج وإيداع المبلغ',
+                                  'Approved return and processed refund per method'
+                                )
+                            )
+                          }
+                          className="px-4 py-2 rounded-xl bg-[#1B6B45] text-white text-xs font-bold hover:bg-[#145335] whitespace-nowrap"
+                        >
+                          {t('اعتماد الإرجاع واسترداد المبلغ', 'Approve Return & Refund')}
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={() =>
-                          processReturnRequest(
-                            order.id,
-                            false,
-                            noteDraft.trim() ||
-                              t(
-                                'تعذر قبول الإرجاع لعدم استيفاء شروط السياسة',
-                                'Return declined per policy guidelines'
-                              )
-                          )
-                        }
-                        className="px-4 py-2 rounded-xl border border-[#9E2A2B]/40 text-[#9E2A2B] text-xs font-bold hover:bg-red-50 whitespace-nowrap"
-                      >
-                        {t('رفض المطالبة', 'Decline Return')}
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            processReturnRequest(
+                              order.id,
+                              false,
+                              noteDraft.trim() ||
+                                t(
+                                  'تعذر قبول الإرجاع لعدم استيفاء شروط السياسة',
+                                  'Return declined per policy guidelines'
+                                )
+                            )
+                          }
+                          className="px-4 py-2 rounded-xl border border-[#9E2A2B]/40 text-[#9E2A2B] text-xs font-bold hover:bg-red-50 whitespace-nowrap"
+                        >
+                          {t('رفض المطالبة', 'Decline Return')}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-xs font-bold text-[#57534E]">
+                        {req?.resolvedBy
+                          ? t(`تم الفصل بواسطة: ${req.resolvedBy}`, `Resolved by: ${req.resolvedBy}`)
+                          : t('تم إغلاق المطالبة', 'Claim Adjudicated')}
+                      </div>
+                    )}
                   </div>
                 </div>
               );

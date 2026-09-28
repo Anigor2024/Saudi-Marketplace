@@ -18,12 +18,22 @@ import { Coupon, SupportTicket } from '@/lib/types';
 import { maskIbanInText } from '@/lib/utils';
 
 interface AdminPromotionsSupportModerationProps {
-  section: 'coupons' | 'tickets' | 'moderation';
+  section?: 'coupons' | 'tickets' | 'moderation' | 'promotions' | 'support';
+  activeSection?: 'coupons' | 'tickets' | 'moderation' | 'promotions' | 'support';
 }
 
 export default function AdminPromotionsSupportModeration({
   section,
+  activeSection,
 }: AdminPromotionsSupportModerationProps) {
+  const rawSection = activeSection || section || 'promotions';
+  const effectiveSection =
+    rawSection === 'promotions'
+      ? 'coupons'
+      : rawSection === 'support'
+      ? 'tickets'
+      : rawSection;
+
   const {
     lang,
     t,
@@ -38,6 +48,7 @@ export default function AdminPromotionsSupportModeration({
     toggleCouponStatus,
     deleteCoupon,
     replyToSupportTicket,
+    updatePayoutTreasuryStatus,
     moderateReviewStatus,
     deleteReviewAdmin,
     replyToReview,
@@ -134,13 +145,21 @@ export default function AdminPromotionsSupportModeration({
   const [ticketStatusFilter, setTicketStatusFilter] = useState<
     'all' | 'open' | 'in_progress' | 'resolved'
   >('all');
+  const [ticketWorkflowFilter, setTicketWorkflowFilter] = useState<
+    'all' | 'support' | 'payout' | 'return_inspection' | 'seller_application_info'
+  >('all');
   const [ticketSearch, setTicketSearch] = useState('');
   const [ticketReplies, setTicketReplies] = useState<Record<string, string>>({});
+  const [treasuryDrafts, setTreasuryDrafts] = useState<
+    Record<string, NonNullable<SupportTicket['treasuryStatus']>>
+  >({});
 
   const filteredTickets = useMemo(() => {
     const q = ticketSearch.trim().toLowerCase();
     return tickets.filter((tkt) => {
       if (ticketStatusFilter !== 'all' && tkt.status !== ticketStatusFilter) return false;
+      const wf = tkt.workflowType || 'support';
+      if (ticketWorkflowFilter !== 'all' && wf !== ticketWorkflowFilter) return false;
       if (!q) return true;
       return (
         tkt.ticketNumber.toLowerCase().includes(q) ||
@@ -149,7 +168,7 @@ export default function AdminPromotionsSupportModeration({
         (tkt.orderNumber || '').toLowerCase().includes(q)
       );
     });
-  }, [tickets, ticketStatusFilter, ticketSearch]);
+  }, [tickets, ticketStatusFilter, ticketWorkflowFilter, ticketSearch]);
 
   // ============================================================================
   // 3. REVIEWS & QUESTIONS MODERATION STATE
@@ -175,7 +194,7 @@ export default function AdminPromotionsSupportModeration({
   // ============================================================================
   // RENDER 1: COUPONS & PROMOTIONS
   // ============================================================================
-  if (section === 'coupons') {
+  if (effectiveSection === 'coupons') {
     const activeCount = coupons.filter((c) => c.isActive).length;
     const totalRedemptions = coupons.reduce((sum, c) => sum + c.usedCount, 0);
 
@@ -548,7 +567,7 @@ export default function AdminPromotionsSupportModeration({
   // ============================================================================
   // RENDER 2: SUPPORT TICKETS & CONCIERGE DESK
   // ============================================================================
-  if (section === 'tickets') {
+  if (effectiveSection === 'tickets') {
     const openCount = tickets.filter((tkt) => tkt.status === 'open').length;
     const inProgCount = tickets.filter((tkt) => tkt.status === 'in_progress').length;
     const resolvedCount = tickets.filter((tkt) => tkt.status === 'resolved').length;
@@ -600,28 +619,56 @@ export default function AdminPromotionsSupportModeration({
 
         {/* Filters */}
         <div className="bg-white rounded-2xl border border-[#E6E0D6] p-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-1 p-1 bg-[#FAF8F5] rounded-xl border border-[#E6E0D6]">
-            {(
-              [
-                { id: 'all', labelAr: 'الكل', labelEn: 'All' },
-                { id: 'open', labelAr: 'مفتوحة', labelEn: 'Open' },
-                { id: 'in_progress', labelAr: 'قيد المعالجة', labelEn: 'In Progress' },
-                { id: 'resolved', labelAr: 'محلولة', labelEn: 'Resolved' },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setTicketStatusFilter(tab.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
-                  ticketStatusFilter === tab.id
-                    ? 'bg-[#0B4F3F] text-white'
-                    : 'text-[#57534E] hover:text-[#141413]'
-                }`}
-              >
-                {t(tab.labelAr, tab.labelEn)}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 p-1 bg-[#FAF8F5] rounded-xl border border-[#E6E0D6]">
+              {(
+                [
+                  { id: 'all', labelAr: 'الكل', labelEn: 'All' },
+                  { id: 'open', labelAr: 'مفتوحة', labelEn: 'Open' },
+                  { id: 'in_progress', labelAr: 'قيد المعالجة', labelEn: 'In Progress' },
+                  { id: 'resolved', labelAr: 'محلولة', labelEn: 'Resolved' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setTicketStatusFilter(tab.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap ${
+                    ticketStatusFilter === tab.id
+                      ? 'bg-[#0B4F3F] text-white'
+                      : 'text-[#57534E] hover:text-[#141413]'
+                  }`}
+                >
+                  {t(tab.labelAr, tab.labelEn)}
+                </button>
+              ))}
+            </div>
+
+            <select
+              value={ticketWorkflowFilter}
+              onChange={(e) =>
+                setTicketWorkflowFilter(
+                  e.target.value as
+                    | 'all'
+                    | 'support'
+                    | 'payout'
+                    | 'return_inspection'
+                    | 'seller_application_info'
+                )
+              }
+              aria-label={t('تصفية حسب نوع سير العمل', 'Filter by Workflow Type')}
+              className="px-3 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold text-[#141413]"
+            >
+              <option value="all">{t('جميع المسارات (Workflows)', 'All Workflows')}</option>
+              <option value="support">{t('دعم العملاء (support)', 'Customer Support')}</option>
+              <option value="payout">{t('تسويات الخزينة (payout)', 'Treasury Payouts')}</option>
+              <option value="return_inspection">
+                {t('فحص المرتجعات (return_inspection)', 'Return Inspections')}
+              </option>
+              <option value="seller_application_info">
+                {t('استكمال بيانات متجر (seller_application_info)', 'Seller App Info')}
+              </option>
+            </select>
           </div>
 
           <div className="relative min-w-[260px] flex-1 max-w-md">
@@ -643,6 +690,14 @@ export default function AdminPromotionsSupportModeration({
         <div className="space-y-4">
           {filteredTickets.map((tkt) => {
             const replyDraft = ticketReplies[tkt.id] ?? tkt.replyAr ?? '';
+            const wf = tkt.workflowType || 'support';
+            const isPayout = wf === 'payout' || Boolean(tkt.payoutAmount);
+            const currentTreasury = tkt.treasuryStatus || 'requested';
+            const selectedTreasury = treasuryDrafts[tkt.id] || currentTreasury;
+            const relatedSeller = tkt.sellerId
+              ? sellers.find((s) => s.id === tkt.sellerId)
+              : undefined;
+
             return (
               <div
                 key={tkt.id}
@@ -650,19 +705,23 @@ export default function AdminPromotionsSupportModeration({
               >
                 <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#F3EFEA] pb-3">
                   <div>
-                    <div className="flex items-center gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
                       <span className="font-mono font-bold text-[#0B4F3F]">
                         #{tkt.ticketNumber}
+                      </span>
+                      <span>·</span>
+                      <span className="px-2 py-0.5 rounded bg-[#FAF8F5] border border-[#E6E0D6] font-mono text-[11px] font-bold text-[#141413]">
+                        {wf}
                       </span>
                       <span>·</span>
                       <span className="font-semibold text-[#57534E]">
                         {lang === 'ar' ? tkt.categoryAr : tkt.categoryEn}
                       </span>
-                      {tkt.orderNumber && (
+                      {(tkt.orderNumber || tkt.relatedOrderId) && (
                         <>
                           <span>·</span>
                           <span className="font-mono text-[#141413]">
-                            {t('الطلب:', 'Order:')} #{tkt.orderNumber}
+                            {t('الطلب:', 'Order:')} #{tkt.orderNumber || tkt.relatedOrderId}
                           </span>
                         </>
                       )}
@@ -690,6 +749,96 @@ export default function AdminPromotionsSupportModeration({
                   </span>
                 </div>
 
+                {/* Structured Payout Treasury Panel */}
+                {isPayout && (
+                  <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#C59B27]/40 space-y-3 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="font-bold text-[#141413]">
+                          {t(
+                            'طلب تسوية خزينة مهيكل (Structured Merchant Payout Request)',
+                            'Structured Merchant Payout Request'
+                          )}
+                        </div>
+                        <div className="text-[11px] text-[#57534E] mt-0.5">
+                          {t('المتجر:', 'Boutique:')}{' '}
+                          <span className="font-bold text-[#0B4F3F]">
+                            {relatedSeller
+                              ? lang === 'ar'
+                                ? relatedSeller.nameAr
+                                : relatedSeller.nameEn
+                              : tkt.sellerId || tkt.userName}
+                          </span>{' '}
+                          · {t('حساب الآيبان المحمي:', 'Masked IBAN:')}{' '}
+                          <span className="font-mono font-bold text-[#141413]">
+                            SA•• •••• •••• •••• •••• {tkt.ibanLast4 || '****'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-end">
+                        <div className="text-sm font-bold font-mono text-[#0B4F3F]">
+                          {formatPrice(tkt.payoutAmount || 0)}
+                        </div>
+                        <div className="text-[11px] font-bold text-[#B7791F]">
+                          {t('حالة الخزينة:', 'Treasury Status:')} {currentTreasury}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#E6E0D6]">
+                      <span className="text-[11px] text-[#8C857B]">
+                        {t(
+                          'ملاحظة رقابية: تحديث حالة الخزينة يوثّق مسار المراجعة الداخلية فقط ولا ينفذ تحويلاً بنكياً خارجياً تلقائياً.',
+                          'Audit Notice: Updating treasuryStatus records internal review state only and does not execute an external bank transfer.'
+                        )}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={selectedTreasury}
+                          onChange={(e) =>
+                            setTreasuryDrafts((prev) => ({
+                              ...prev,
+                              [tkt.id]: e.target.value as NonNullable<
+                                SupportTicket['treasuryStatus']
+                              >,
+                            }))
+                          }
+                          className="px-3 py-1.5 rounded-lg bg-white border border-[#E6E0D6] text-xs font-bold text-[#141413]"
+                        >
+                          <option value="requested">
+                            {t('جديد (requested)', 'Requested (requested)')}
+                          </option>
+                          <option value="under_review">
+                            {t('قيد مراجعة الخزينة (under_review)', 'Under Review (under_review)')}
+                          </option>
+                          <option value="approved_for_treasury">
+                            {t(
+                              'معتمد للصرف البنكي (approved_for_treasury)',
+                              'Approved for Treasury (approved_for_treasury)'
+                            )}
+                          </option>
+                          <option value="completed">
+                            {t('مكتمل الدفترياً (completed)', 'Completed in Ledger (completed)')}
+                          </option>
+                          <option value="rejected">
+                            {t('مرفوض (rejected)', 'Rejected (rejected)')}
+                          </option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updatePayoutTreasuryStatus(tkt.id, selectedTreasury, replyDraft)
+                          }
+                          className="px-3.5 py-1.5 rounded-lg bg-[#141413] text-[#C59B27] text-xs font-bold hover:bg-black whitespace-nowrap"
+                        >
+                          {t('تحديث حالة الخزينة', 'Update Treasury Status')}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs text-[#141413] leading-relaxed">
                   {maskIbanInText(tkt.message)}
                 </div>
@@ -711,8 +860,8 @@ export default function AdminPromotionsSupportModeration({
                       setTicketReplies((prev) => ({ ...prev, [tkt.id]: e.target.value }))
                     }
                     placeholder={t(
-                      'اكتب رد الإدارة التنفيذية أو تأكيد التسوية البنكية...',
-                      'Write official concierge response or settlement confirmation...'
+                      'اكتب رد الإدارة التنفيذية أو ملاحظة الخزينة...',
+                      'Write official concierge response or treasury note...'
                     )}
                     className="flex-1 min-w-[240px] px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs text-[#141413]"
                   />

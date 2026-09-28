@@ -311,6 +311,12 @@ interface MarketplaceContextType {
     replyText: string,
     status: SupportTicket['status']
   ) => Promise<void>;
+  requestSellerApplicationInfo: (sellerId: string, requestedInfoNote: string) => Promise<void>;
+  updatePayoutTreasuryStatus: (
+    ticketId: string,
+    treasuryStatus: NonNullable<SupportTicket['treasuryStatus']>,
+    adminNote?: string
+  ) => Promise<void>;
   settleSellerPayoutTicket: (ticketId: string, adminReferenceNote?: string) => Promise<void>;
   moderateReviewStatus: (reviewId: string, status: Review['status']) => Promise<void>;
   deleteReviewAdmin: (reviewId: string) => Promise<void>;
@@ -1868,6 +1874,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         refundMethod,
         requestedAt: nowIso,
         status: 'pending' as const,
+        refundStatus: 'none' as const,
       };
       const updated: Order = {
         ...target,
@@ -2168,6 +2175,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         categoryEn: categoryAr,
         subject,
         message,
+        workflowType: 'support',
         orderNumber,
         status: 'open',
         createdAt: new Date().toISOString().split('T')[0],
@@ -2899,6 +2907,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         categoryEn: 'Merchant Return Inspection Report',
         subject: `تقرير فحص مرتجع الطلب #${target.orderNumber} (${recommendation})`,
         message: merchantNote.trim() || 'تم فحص حالة المرتجع من قِبل المتجر ورفع التوصية للإدارة.',
+        workflowType: 'return_inspection',
+        relatedOrderId: target.id,
         orderId: target.id,
         orderNumber: target.orderNumber,
         sellerId: currentUser.sellerId || target.sellerIds?.[0] || target.items[0]?.sellerId,
@@ -3115,6 +3125,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!target || amount <= 0 || amount > target.availableBalance) return;
 
       const maskedTargetIban = maskIban(target.iban);
+      const ibanLast4Digits = target.iban.replace(/\s+/g, '').slice(-4);
       const payoutTicket: SupportTicket = {
         id: `tkt-payout-${Date.now()}`,
         ticketNumber: `PAY-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -3125,8 +3136,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         categoryEn: 'Merchant Payout Settlement (SARIE)',
         subject: `طلب تحويل أرباح متجر (${target.nameAr}) بمبلغ ${amount} ر.س`,
         message: `طلب تسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المعتمد (${maskedTargetIban}).`,
+        workflowType: 'payout',
         sellerId: target.id,
         payoutAmount: amount,
+        ibanLast4: ibanLast4Digits,
+        treasuryStatus: 'requested',
         status: 'open',
         createdAt: new Date().toISOString().split('T')[0],
       };
@@ -3229,13 +3243,55 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!target) return;
 
       const isApproved = status === 'approved';
+      const applicantUid = target.applicantUserId?.trim();
+
+      // Strict Requirement 2: Block approval of unlinked legacy seller applications
+      // Require BOTH seller.applicantUserId exists AND users/{applicantUserId} exists.
+      // Never guess identity by email. Never approve an orphan Seller record.
+      let verifiedApplicantUser: UserProfile | undefined = applicantUid
+        ? users.find((u) => u.id === applicantUid)
+        : undefined;
+
+      if (isApproved) {
+        if (!applicantUid) {
+          showToast(
+            lang === 'ar'
+              ? 'لا يمكن اعتماد هذا الطلب قبل ربطه بحساب مستخدم صالح'
+              : 'This legacy application must be linked to a valid user account before approval.',
+            undefined,
+            'error'
+          );
+          return;
+        }
+
+        if (!isDemoMode && !verifiedApplicantUser) {
+          try {
+            const applicantSnap = await getDoc(doc(db, 'users', applicantUid));
+            if (applicantSnap.exists()) {
+              verifiedApplicantUser = applicantSnap.data() as UserProfile;
+            }
+          } catch (e) {
+            logFirestoreFailure(e, OperationType.GET, 'users');
+          }
+        }
+
+        if (!verifiedApplicantUser) {
+          showToast(
+            lang === 'ar'
+              ? 'لا يمكن اعتماد هذا الطلب قبل ربطه بحساب مستخدم صالح'
+              : 'This legacy application must be linked to a valid user account before approval.',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
       const updated: Seller = {
         ...target,
         status,
         verifiedBadge: isApproved,
       };
-
-      const applicantUid = target.applicantUserId?.trim();
 
       if (!isDemoMode) {
         try {
@@ -3245,28 +3301,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           );
           batch.set(doc(db, 'sellers', sellerId), cleanSeller);
 
-          if (isApproved && applicantUid) {
+          if (isApproved && applicantUid && verifiedApplicantUser) {
             const applicantRef = doc(db, 'users', applicantUid);
-            const existingApplicant = users.find((u) => u.id === applicantUid);
-            if (existingApplicant) {
-              const activatedUser: UserProfile = {
-                ...existingApplicant,
-                role: 'seller',
-                sellerId: sellerId,
-              };
-              const cleanUser = Object.fromEntries(
-                Object.entries(activatedUser).filter(([, v]) => v !== undefined)
-              );
-              batch.set(applicantRef, cleanUser);
-            } else {
-              const snap = await getDoc(applicantRef);
-              if (snap.exists()) {
-                batch.update(applicantRef, {
-                  role: 'seller',
-                  sellerId: sellerId,
-                });
-              }
-            }
+            const activatedUser: UserProfile = {
+              ...verifiedApplicantUser,
+              role: 'seller',
+              sellerId: sellerId,
+            };
+            const cleanUser = Object.fromEntries(
+              Object.entries(activatedUser).filter(([, v]) => v !== undefined)
+            );
+            batch.set(applicantRef, cleanUser);
           }
 
           await batch.commit();
@@ -3318,6 +3363,88 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             ? 'تمت ترقية حساب مقدم الطلب إلى تاجر معتمد وربطه بالمتجر'
             : 'Applicant account activated with Seller privileges'
           : undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, sellers, users, addAuditLog, lang, showToast]
+  );
+
+  const requestSellerApplicationInfo = useCallback(
+    async (sellerId: string, requestedInfoNote: string) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const target = sellers.find((s) => s.id === sellerId);
+      if (!target) return;
+
+      const applicantUid = target.applicantUserId?.trim();
+      if (!applicantUid) {
+        showToast(
+          lang === 'ar'
+            ? 'لا يمكن اعتماد هذا الطلب قبل ربطه بحساب مستخدم صالح'
+            : 'This legacy application must be linked to a valid user account before approval.',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
+      const applicantUser = users.find((u) => u.id === applicantUid);
+      const nowDate = new Date().toISOString().split('T')[0];
+      const messageBody =
+        requestedInfoNote.trim() ||
+        (lang === 'ar'
+          ? 'يرجى تزويد فريق التوثيق بنسخة محدثة من السجل التجاري الساري وشهادة ضريبة القيمة المضافة (ZATCA) وخطاب الآيبان البنكي المعتمد لاستكمال إجراءات اعتماد المتجر.'
+          : 'Please provide an updated Commercial Registration (CR), active ZATCA VAT certificate, and verified IBAN bank letter to complete your seller onboarding.');
+
+      const infoTicket: SupportTicket = {
+        id: `tkt-appinfo-${Date.now()}`,
+        ticketNumber: `ONB-${Math.floor(1000 + Math.random() * 9000)}`,
+        userId: applicantUid,
+        userName: applicantUser?.name || target.ownerName || target.nameAr,
+        userEmail: applicantUser?.email || target.email,
+        categoryAr: 'استكمال بيانات طلب انضمام متجر',
+        categoryEn: 'Seller Application Information Request',
+        subject:
+          lang === 'ar'
+            ? `طلب استكمال بيانات لاعتماد متجر «${target.nameAr}»`
+            : `Information Request for Seller Application "${target.nameEn}"`,
+        message: messageBody,
+        workflowType: 'seller_application_info',
+        sellerId: target.id,
+        status: 'open',
+        createdAt: nowDate,
+      };
+
+      if (!isDemoMode) {
+        try {
+          const cleanTicket = Object.fromEntries(
+            Object.entries(infoTicket).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'tickets', infoTicket.id), cleanTicket);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+          showToast(
+            lang === 'ar'
+              ? 'تعذر إرسال طلب استكمال البيانات'
+              : 'Failed to create information request ticket',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setTickets((prev) => [infoTicket, ...prev]);
+      await addAuditLog(
+        `إرسال طلب استكمال بيانات ومستندات لطلب انضمام متجر «${target.nameAr}» (تذكرة #${infoTicket.ticketNumber})`,
+        `Requested additional onboarding information for "${target.nameEn}" (Ticket #${infoTicket.ticketNumber})`,
+        'seller',
+        sellerId
+      );
+      showToast(
+        lang === 'ar'
+          ? `تم إرسال طلب استكمال البيانات لمتجر ${target.nameAr}`
+          : `Information Request Sent to ${target.nameEn}`,
+        `#${infoTicket.ticketNumber}`,
         'success'
       );
     },
@@ -3458,7 +3585,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (
         target.status !== 'return_requested' ||
         (target.returnRequest && target.returnRequest.status !== 'pending') ||
-        Boolean(target.returnRequest?.refundProcessedAt)
+        target.returnRequest?.refundStatus === 'wallet_completed' ||
+        target.returnRequest?.refundStatus === 'external_authorized_pending'
       ) {
         showToast(
           lang === 'ar'
@@ -3473,32 +3601,38 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       // Reconcile any seller return inspection ticket submitted in production
       const matchingReturnTicket = tickets.find(
         (tkt) =>
-          (tkt.orderId === orderId || tkt.orderNumber === target.orderNumber) &&
-          Boolean(tkt.returnRecommendation)
+          (tkt.workflowType === 'return_inspection' || Boolean(tkt.returnRecommendation)) &&
+          (tkt.relatedOrderId === orderId ||
+            tkt.orderId === orderId ||
+            tkt.orderNumber === target.orderNumber)
       );
 
       const nowIso = new Date().toISOString();
       const nowDate = nowIso.split('T')[0];
+      const effectiveRefundMethod = target.returnRequest?.refundMethod || ('wallet' as const);
 
-      const mergedReturnRequest = {
+      const nextRefundStatus: NonNullable<Order['returnRequest']>['refundStatus'] = !approve
+        ? 'none'
+        : effectiveRefundMethod === 'wallet'
+        ? 'wallet_completed'
+        : 'external_authorized_pending';
+
+      const mergedReturnRequest: NonNullable<Order['returnRequest']> = {
         reasonAr: target.returnRequest?.reasonAr || 'طلب إرجاع منتج',
         reasonEn: target.returnRequest?.reasonEn || 'Product return request',
         details: target.returnRequest?.details || '',
-        refundMethod: target.returnRequest?.refundMethod || ('wallet' as const),
+        refundMethod: effectiveRefundMethod,
         requestedAt: target.returnRequest?.requestedAt || target.updatedAt,
         sellerRecommendation:
           target.returnRequest?.sellerRecommendation || matchingReturnTicket?.returnRecommendation,
         sellerInspectionNote:
           target.returnRequest?.sellerInspectionNote || matchingReturnTicket?.message,
-        status: (approve ? 'approved' : 'rejected') as 'approved' | 'rejected',
+        status: approve ? 'approved' : 'rejected',
+        refundStatus: nextRefundStatus,
+        refundUpdatedAt: nowIso,
         adminNote,
         resolvedBy: currentUser.name,
-        ...(approve
-          ? {
-              refundProcessedAt: nowIso,
-              refundAmount: target.total,
-            }
-          : {}),
+        ...(approve ? { refundAmount: target.total } : {}),
       };
 
       const cleanReturnRequest = Object.fromEntries(
@@ -3514,7 +3648,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       };
 
       let updatedCustomer: UserProfile | null = null;
-      if (approve && mergedReturnRequest.refundMethod === 'wallet') {
+      if (approve && effectiveRefundMethod === 'wallet') {
         const customerProfile = users.find((u) => u.id === target.customerId);
         if (customerProfile) {
           updatedCustomer = {
@@ -3527,12 +3661,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!isDemoMode) {
         try {
           const batch = writeBatch(db);
-          const cleanOrder = Object.fromEntries(
-            Object.entries(updated).filter(([, v]) => v !== undefined)
-          );
-          batch.set(doc(db, 'orders', orderId), cleanOrder);
 
-          if (approve && mergedReturnRequest.refundMethod === 'wallet') {
+          if (approve && effectiveRefundMethod === 'wallet') {
             const customerRef = doc(db, 'users', target.customerId);
             if (updatedCustomer) {
               const cleanCustomer = Object.fromEntries(
@@ -3541,14 +3671,20 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
               batch.set(customerRef, cleanCustomer);
             } else {
               const customerSnap = await getDoc(customerRef);
-              if (customerSnap.exists()) {
-                const currentData = customerSnap.data() as UserProfile;
-                const nextBal = Number(((currentData.walletBalance || 0) + target.total).toFixed(2));
-                batch.update(customerRef, { walletBalance: nextBal });
-                updatedCustomer = { ...currentData, walletBalance: nextBal };
+              if (!customerSnap.exists()) {
+                throw new Error('Customer wallet profile not found for atomic refund');
               }
+              const currentData = customerSnap.data() as UserProfile;
+              const nextBal = Number(((currentData.walletBalance || 0) + target.total).toFixed(2));
+              batch.update(customerRef, { walletBalance: nextBal });
+              updatedCustomer = { ...currentData, walletBalance: nextBal };
             }
           }
+
+          const cleanOrder = Object.fromEntries(
+            Object.entries(updated).filter(([, v]) => v !== undefined)
+          );
+          batch.set(doc(db, 'orders', orderId), cleanOrder);
 
           if (matchingReturnTicket && matchingReturnTicket.status !== 'resolved') {
             batch.update(doc(db, 'tickets', matchingReturnTicket.id), {
@@ -3593,17 +3729,31 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
 
       await addAuditLog(
-        `${approve ? 'الموافقة على إرجاع واسترداد مبلغ' : 'رفض طلب إرجاع'} الطلب #${target.orderNumber} (${formatPrice(target.total)})`,
-        `${approve ? 'Approved return & refund for' : 'Declined return for'} Order #${target.orderNumber} (${formatPrice(target.total)})`,
+        approve
+          ? effectiveRefundMethod === 'wallet'
+            ? `الموافقة على إرجاع الطلب #${target.orderNumber} وإيداع ${formatPrice(target.total)} في محفظة العميل`
+            : `اعتماد استرداد الطلب #${target.orderNumber} (${formatPrice(target.total)}) — بانتظار التسوية عبر بوابة الدفع`
+          : `رفض طلب إرجاع الطلب #${target.orderNumber}`,
+        approve
+          ? effectiveRefundMethod === 'wallet'
+            ? `Approved return & completed wallet refund for Order #${target.orderNumber} (${formatPrice(target.total)})`
+            : `Refund Authorized — External Gateway Settlement Required for Order #${target.orderNumber} (${formatPrice(target.total)})`
+          : `Declined return for Order #${target.orderNumber}`,
         'return',
         orderId
       );
       showToast(
-        lang === 'ar'
-          ? approve
-            ? `تمت الموافقة على إرجاع الطلب #${target.orderNumber} واسترداد ${formatPrice(target.total)}`
-            : `تم رفض طلب الإرجاع للطلب #${target.orderNumber}`
-          : `Return request for #${target.orderNumber} processed`,
+        approve
+          ? effectiveRefundMethod === 'wallet'
+            ? lang === 'ar'
+              ? `تمت الموافقة على إرجاع الطلب #${target.orderNumber} وإيداع ${formatPrice(target.total)} بالمحفظة`
+              : `Return approved & ${formatPrice(target.total)} credited to customer wallet`
+            : lang === 'ar'
+            ? 'تم اعتماد الاسترداد — بانتظار التسوية عبر بوابة الدفع'
+            : 'Refund Authorized — External Gateway Settlement Required'
+          : lang === 'ar'
+          ? `تم رفض طلب الإرجاع للطلب #${target.orderNumber}`
+          : `Return request for #${target.orderNumber} declined`,
         undefined,
         'success'
       );
@@ -3743,6 +3893,93 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           ? `تم تحديث تذكرة الدعم #${target.ticketNumber}`
           : `Support Ticket #${target.ticketNumber} Updated`,
         undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, tickets, addAuditLog, lang, showToast]
+  );
+
+  const updatePayoutTreasuryStatus = useCallback(
+    async (
+      ticketId: string,
+      treasuryStatus: NonNullable<SupportTicket['treasuryStatus']>,
+      adminNote?: string
+    ) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const targetTicket = tickets.find((tkt) => tkt.id === ticketId);
+      if (!targetTicket) return;
+
+      const nowDate = new Date().toISOString().split('T')[0];
+      const nextTicketStatus: SupportTicket['status'] =
+        treasuryStatus === 'requested'
+          ? 'open'
+          : treasuryStatus === 'under_review' || treasuryStatus === 'approved_for_treasury'
+          ? 'in_progress'
+          : 'resolved';
+
+      const statusLabelAr: Record<NonNullable<SupportTicket['treasuryStatus']>, string> = {
+        requested: 'طلب جديد بانتظار المراجعة',
+        under_review: 'قيد المراجعة والتدقيق المالي',
+        approved_for_treasury: 'معتمد للرفع إلى الخزينة — بانتظار تنفيذ التحويل البنكي الخارجي',
+        rejected: 'مرفوض من الإدارة المالية',
+        completed: 'تم تسجيل إتمام التسوية البنكية الخارجية',
+      };
+
+      const statusLabelEn: Record<NonNullable<SupportTicket['treasuryStatus']>, string> = {
+        requested: 'Requested — Awaiting Review',
+        under_review: 'Under Financial Audit',
+        approved_for_treasury: 'Approved for Treasury — Awaiting External Bank Transfer Execution',
+        rejected: 'Rejected by Treasury',
+        completed: 'External Bank Settlement Recorded',
+      };
+
+      const defaultNote =
+        adminNote?.trim() ||
+        (lang === 'ar'
+          ? `تحديث حالة الخزينة: ${statusLabelAr[treasuryStatus]}`
+          : `Treasury Status Updated: ${statusLabelEn[treasuryStatus]}`);
+
+      const updatedTicket: SupportTicket = {
+        ...targetTicket,
+        workflowType: targetTicket.workflowType || 'payout',
+        treasuryStatus,
+        status: nextTicketStatus,
+        replyAr: defaultNote,
+        replyEn: defaultNote,
+        repliedAt: nowDate,
+      };
+
+      if (!isDemoMode) {
+        try {
+          const cleanTicket = Object.fromEntries(
+            Object.entries(updatedTicket).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'tickets', ticketId), cleanTicket);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'tickets');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث حالة طلب التحويل' : 'Failed to update payout treasury status',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setTickets((prev) => prev.map((tkt) => (tkt.id === ticketId ? updatedTicket : tkt)));
+
+      await addAuditLog(
+        `تحديث حالة خزينة تذكرة التحويل #${targetTicket.ticketNumber} إلى (${statusLabelAr[treasuryStatus]})`,
+        `Updated payout ticket #${targetTicket.ticketNumber} treasuryStatus to ${treasuryStatus}`,
+        'ticket',
+        ticketId
+      );
+
+      showToast(
+        lang === 'ar'
+          ? `تم تحديث حالة طلب التحويل #${targetTicket.ticketNumber}`
+          : `Payout Ticket #${targetTicket.ticketNumber} Treasury Status Updated`,
+        lang === 'ar' ? statusLabelAr[treasuryStatus] : statusLabelEn[treasuryStatus],
         'success'
       );
     },
@@ -4175,6 +4412,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     processReturnRequest,
     adjustCustomerWalletAndLoyalty,
     replyToSupportTicket,
+    requestSellerApplicationInfo,
+    updatePayoutTreasuryStatus,
     settleSellerPayoutTicket,
     moderateReviewStatus,
     deleteReviewAdmin,

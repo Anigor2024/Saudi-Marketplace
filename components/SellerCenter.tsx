@@ -58,6 +58,7 @@ export default function SellerCenter() {
     formatPrice,
     currentUser,
     isDemoMode,
+    canAccessSellerDashboard,
     sellers,
     products,
     categories,
@@ -467,6 +468,42 @@ export default function SellerCenter() {
       'success'
     );
   };
+
+  if (!canAccessSellerDashboard || (currentUser?.role !== 'admin' && activeSeller.status !== 'approved')) {
+    return (
+      <div className="min-h-[75vh] bg-[#FAF8F5] flex items-center justify-center px-4 py-16">
+        <div className="max-w-lg w-full bg-white rounded-2xl border border-[#E5E0D8] p-8 text-center shadow-sm">
+          <div className="w-16 h-16 rounded-2xl bg-red-50 text-red-700 border border-red-200 flex items-center justify-center mx-auto mb-4">
+            <AlertTriangle className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-[#141413]">
+            {activeSeller.status === 'suspended'
+              ? t('تم إيقاف حساب المتجر مؤقتاً', 'Seller Account Suspended')
+              : t('غير مصرح بالوصول إلى بوابة التجار', 'Seller Center Access Denied')}
+          </h2>
+          <p className="text-sm text-[#6B675E] mt-2 leading-relaxed">
+            {activeSeller.status === 'suspended'
+              ? t(
+                  'تم تعليق صلاحيات بوابة التجار لهذا المتجر من قِبل الإدارة التنفيذية. جميع عمليات الكتالوج والطلبات والتحويلات موقوفة حتى إعادة التفعيل.',
+                  'Seller Center privileges for this boutique have been suspended by Executive Operations. All catalog, order, and payout operations are blocked until reinstatement.'
+                )
+              : t(
+                  'تتطلب بوابة التجار حساب تاجر معتمد ومفعّل (status = approved).',
+                  'Seller Center requires an active approved merchant account (status = approved).'
+                )}
+          </p>
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button
+              onClick={() => navigateTo('home')}
+              className="px-5 py-2.5 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold hover:bg-[#093E31]"
+            >
+              {t('العودة للواجهة الرئيسية', 'Return to Storefront')}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#FAF8F5]">

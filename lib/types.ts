@@ -243,11 +243,12 @@ export interface ReturnRequest {
   refundMethod: 'wallet' | 'original_payment';
   requestedAt: string;
   status: 'pending' | 'approved' | 'rejected';
+  refundStatus: 'none' | 'wallet_completed' | 'external_authorized_pending' | 'failed';
+  refundAmount?: number;
+  refundUpdatedAt?: string;
   adminNote?: string;
   sellerInspectionNote?: string;
   sellerRecommendation?: 'approve_restock' | 'inspect_required' | 'dispute';
-  refundProcessedAt?: string;
-  refundAmount?: number;
   resolvedBy?: string;
 }
 
@@ -373,10 +374,14 @@ export interface SupportTicket {
   categoryEn: string;
   subject: string;
   message: string;
+  workflowType?: 'support' | 'return_inspection' | 'payout' | 'seller_application_info';
+  sellerId?: string;
+  relatedOrderId?: string;
   orderId?: string;
   orderNumber?: string;
-  sellerId?: string;
   payoutAmount?: number;
+  ibanLast4?: string;
+  treasuryStatus?: 'requested' | 'under_review' | 'approved_for_treasury' | 'rejected' | 'completed';
   returnRecommendation?: 'approve_restock' | 'inspect_required' | 'dispute';
   status: 'open' | 'in_progress' | 'resolved';
   createdAt: string;
