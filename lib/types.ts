@@ -128,6 +128,7 @@ export interface SellerOperationalSettings {
 
 export interface Seller {
   id: string;
+  applicantUserId?: string; // UID of the customer who submitted the seller onboarding application
   nameAr: string;
   nameEn: string;
   descriptionAr: string;
@@ -245,6 +246,9 @@ export interface ReturnRequest {
   adminNote?: string;
   sellerInspectionNote?: string;
   sellerRecommendation?: 'approve_restock' | 'inspect_required' | 'dispute';
+  refundProcessedAt?: string;
+  refundAmount?: number;
+  resolvedBy?: string;
 }
 
 export type PaymentMethodType = 'mada' | 'apple_pay' | 'visa_mastercard' | 'stc_pay' | 'cod' | 'wallet';
@@ -369,7 +373,10 @@ export interface SupportTicket {
   categoryEn: string;
   subject: string;
   message: string;
+  orderId?: string;
   orderNumber?: string;
+  sellerId?: string;
+  payoutAmount?: number;
   returnRecommendation?: 'approve_restock' | 'inspect_required' | 'dispute';
   status: 'open' | 'in_progress' | 'resolved';
   createdAt: string;

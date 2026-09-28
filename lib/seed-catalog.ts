@@ -338,6 +338,7 @@ export const INITIAL_SELLERS: Seller[] = [
   },
   {
     id: 'seller-2',
+    applicantUserId: 'user-seller-1',
     nameAr: 'آفاق التقنية المعتمدة',
     nameEn: 'Afaq Tech Authorized Store',
     descriptionAr: 'موزع معتمد لأحدث الأجهزة الذكية والحواسيب المحمولة والصوتيات الاحترافية بضمان الوكيل سنتين.',
@@ -532,6 +533,7 @@ export const INITIAL_SELLERS: Seller[] = [
   },
   {
     id: 'seller-8',
+    applicantUserId: 'user-applicant-8',
     nameAr: 'تمور وخيرات القصيم الملكية',
     nameEn: 'Qassim Royal Dates & Sidr Honey',
     descriptionAr: 'مزارع ومناحل معتمدة لإنتاج أفخر تمور السكري والمجدول الملكي وعسل السدر الجبلي الأصلي.',
@@ -890,6 +892,39 @@ export const INITIAL_USERS: UserProfile[] = [
     loyaltyHistory: [],
     preferences: { newsletter: true, smsAlerts: true, whatsappUpdates: true, language: 'ar' },
     createdAt: '2025-09-02',
+  },
+  {
+    id: 'user-applicant-8',
+    name: 'صالح بن إبراهيم أبا الخيل',
+    email: 'orders@qassimroyal.sa',
+    phone: '+966 50 612 7788',
+    role: 'customer',
+    walletBalance: 450.0,
+    loyaltyPoints: 1500,
+    loyaltyTier: 'Silver',
+    referralCode: 'SALEH-ATH26',
+    wishlist: [],
+    addresses: [
+      {
+        id: 'addr-c8',
+        labelAr: 'المقر التجاري - بريدة',
+        labelEn: 'Commercial HQ - Buraidah',
+        recipientName: 'صالح أبا الخيل',
+        phone: '+966 50 612 7788',
+        cityAr: 'بريدة',
+        cityEn: 'Buraidah',
+        districtAr: 'حي الصفراء',
+        streetAr: 'طريق الملك عبدالعزيز',
+        buildingNumber: '3310',
+        postalCode: '52382',
+        additionalNumber: '6412',
+        landmarkAr: 'بجوار مدينة التمور ببريدة',
+        isDefault: true,
+      },
+    ],
+    loyaltyHistory: [],
+    preferences: { newsletter: true, smsAlerts: true, whatsappUpdates: true, language: 'ar' },
+    createdAt: '2026-09-20',
   },
 ];
 
@@ -1735,6 +1770,8 @@ export const INITIAL_TICKETS: SupportTicket[] = [
     subject: 'طلب تحويل أرباح متجر (آفاق التقنية المعتمدة) بمبلغ 45,000 ر.س',
     message:
       'طلب تسوية رصيد متاح بقيمة 45,000 ر.س إلى الحساب البنكي المعتمد (SA89 **** **** **** **** 1234) عبر نظام سار للتحويلات الفورية.',
+    sellerId: 'seller-2',
+    payoutAmount: 45000,
     status: 'in_progress',
     createdAt: '2026-09-27',
   },
@@ -1750,6 +1787,7 @@ export const INITIAL_TICKETS: SupportTicket[] = [
     message:
       'تم التحقق من الرقم التسلسلي لسماعة AirPods Max وأن الغلاف المصنعي غير مفتوح؛ نوصي بالموافقة على الإرجاع وإعادة القطعة للمخزون.',
     orderNumber: 'ATH-98340',
+    sellerId: 'seller-2',
     returnRecommendation: 'approve_restock',
     status: 'open',
     createdAt: '2026-09-27',

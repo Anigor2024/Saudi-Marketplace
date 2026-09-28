@@ -8,6 +8,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
   onSnapshot,
   query,
   where,
@@ -310,6 +311,7 @@ interface MarketplaceContextType {
     replyText: string,
     status: SupportTicket['status']
   ) => Promise<void>;
+  settleSellerPayoutTicket: (ticketId: string, adminReferenceNote?: string) => Promise<void>;
   moderateReviewStatus: (reviewId: string, status: Review['status']) => Promise<void>;
   deleteReviewAdmin: (reviewId: string) => Promise<void>;
   deleteQuestionAdmin: (questionId: string) => Promise<void>;
@@ -886,16 +888,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   // Strict Role-Based Access Control (RBAC) for Seller & Admin Portals
   // Demo Mode remains isolated in local memory and never grants real Firebase privileges.
+  // Suspended, rejected, or pending sellers cannot access Seller Center or perform seller mutations.
   const canAccessSellerDashboard = useMemo(() => {
     if (!currentUser) return false;
-    if (isDemoMode) {
-      return currentUser.role === 'seller' || currentUser.role === 'admin';
-    }
-    return (
-      (currentUser.role === 'seller' && Boolean(currentUser.sellerId?.trim())) ||
-      currentUser.role === 'admin'
-    );
-  }, [currentUser, isDemoMode]);
+    if (currentUser.role === 'admin') return true;
+    if (currentUser.role !== 'seller') return false;
+    const targetSellerId = currentUser.sellerId?.trim() || (isDemoMode ? 'seller-2' : '');
+    if (!targetSellerId) return false;
+    const linkedSeller = sellers.find((s) => s.id === targetSellerId);
+    if (!linkedSeller || linkedSeller.status !== 'approved') return false;
+    return true;
+  }, [currentUser, isDemoMode, sellers]);
 
   const canAccessAdminDashboard = useMemo(() => {
     if (!currentUser) return false;
@@ -905,18 +908,42 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     return currentUser.role === 'admin';
   }, [currentUser, isDemoMode]);
 
-  const isViewAuthorizedForProfile = useCallback((view: AppView, profile: UserProfile): boolean => {
-    if (view === 'admin-dashboard') {
-      return profile.role === 'admin';
-    }
-    if (view === 'seller-dashboard') {
-      return (
-        (profile.role === 'seller' && Boolean(profile.sellerId?.trim())) ||
-        profile.role === 'admin'
+  const isViewAuthorizedForProfile = useCallback(
+    (view: AppView, profile: UserProfile): boolean => {
+      if (view === 'admin-dashboard') {
+        return profile.role === 'admin';
+      }
+      if (view === 'seller-dashboard') {
+        if (profile.role === 'admin') return true;
+        if (profile.role !== 'seller' || !profile.sellerId?.trim()) return false;
+        const linkedSeller = sellers.find((s) => s.id === profile.sellerId);
+        return Boolean(linkedSeller && linkedSeller.status === 'approved');
+      }
+      return true;
+    },
+    [sellers]
+  );
+
+  // Guard helper ensuring that if the caller is a seller, their linked store is currently 'approved'
+  const ensureActiveSellerOrAdmin = useCallback((): boolean => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'admin') return true;
+    if (currentUser.role !== 'seller' || !currentUser.sellerId?.trim()) return false;
+    const linkedSeller = sellers.find((s) => s.id === currentUser.sellerId);
+    if (!linkedSeller || linkedSeller.status !== 'approved') {
+      showToast(
+        lang === 'ar'
+          ? 'حساب المتجر غير نشط حالياً (موقوف أو قيد المراجعة)'
+          : 'Seller Boutique Inactive (Suspended or Pending)',
+        lang === 'ar'
+          ? 'لا يمكن تنفيذ عمليات التاجر حتى يتم تفعيل المتجر من الإدارة التنفيذية'
+          : 'Merchant operations require an active approved boutique status',
+        'error'
       );
+      return false;
     }
     return true;
-  }, []);
+  }, [currentUser, sellers, lang, showToast]);
 
   const navigateTo = useCallback(
     (
@@ -2208,8 +2235,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const saveProduct = useCallback(
     async (product: Product) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) {
-        showToast(lang === 'ar' ? 'غير مصرح بهذا الإجراء' : 'Unauthorized action', undefined, 'error');
+      if (!ensureActiveSellerOrAdmin() || !currentUser) {
         return;
       }
 
@@ -2410,8 +2436,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const deleteProduct = useCallback(
     async (productId: string) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) {
-        showToast(lang === 'ar' ? 'غير مصرح بهذا الإجراء' : 'Unauthorized action', undefined, 'error');
+      if (!ensureActiveSellerOrAdmin() || !currentUser) {
         return;
       }
       const target = products.find((p) => p.id === productId);
@@ -2448,7 +2473,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const bulkUpdateProductStatus = useCallback(
     async (productIds: string[], status: ProductStatus) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       if (currentUser.role === 'seller' && status === 'suspended') return;
       const eligibleIds = productIds.filter((id) => {
         const prod = products.find((p) => p.id === id);
@@ -2485,7 +2510,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const updateProductStock = useCallback(
     async (productId: string, newStock: number, lowStockThreshold?: number) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = products.find((p) => p.id === productId);
       if (!target) return;
       if (currentUser.role === 'seller' && target.sellerId !== currentUser.sellerId) {
@@ -2540,7 +2565,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       carrierEn?: string,
       fulfillmentNote?: string
     ) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
 
@@ -2627,7 +2652,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const saveCoupon = useCallback(
     async (coupon: Coupon) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const existingCoupon = coupons.find((c) => c.id === coupon.id);
 
       if (currentUser.role === 'seller') {
@@ -2723,7 +2748,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const toggleCouponStatus = useCallback(
     async (couponId: string) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = coupons.find((c) => c.id === couponId);
       if (!target) return;
       if (currentUser.role === 'seller' && target.sellerId !== currentUser.sellerId) {
@@ -2754,7 +2779,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const deleteCoupon = useCallback(
     async (couponId: string) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = coupons.find((c) => c.id === couponId);
       if (!target) return;
       if (currentUser.role === 'seller' && target.sellerId !== currentUser.sellerId) {
@@ -2792,7 +2817,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const replyToReview = useCallback(
     async (reviewId: string, replyText: string) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = reviews.find((r) => r.id === reviewId);
       if (!target || !replyText.trim()) return;
       const prod = products.find((p) => p.id === target.productId);
@@ -2844,7 +2869,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       recommendation: 'approve_restock' | 'inspect_required' | 'dispute',
       merchantNote: string
     ) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = orders.find((o) => o.id === orderId);
       if (!target || !target.returnRequest) return;
 
@@ -2864,39 +2889,50 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         updatedAt: new Date().toISOString(),
       };
 
+      const returnTicket: SupportTicket = {
+        id: `tkt-ret-${Date.now()}`,
+        ticketNumber: `RET-${Math.floor(1000 + Math.random() * 9000)}`,
+        userId: isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id,
+        userName: currentUser.name,
+        userEmail: currentUser.email,
+        categoryAr: 'توصية فحص مرتجعات التاجر',
+        categoryEn: 'Merchant Return Inspection Report',
+        subject: `تقرير فحص مرتجع الطلب #${target.orderNumber} (${recommendation})`,
+        message: merchantNote.trim() || 'تم فحص حالة المرتجع من قِبل المتجر ورفع التوصية للإدارة.',
+        orderId: target.id,
+        orderNumber: target.orderNumber,
+        sellerId: currentUser.sellerId || target.sellerIds?.[0] || target.items[0]?.sellerId,
+        returnRecommendation: recommendation,
+        status: 'open',
+        createdAt: new Date().toISOString().split('T')[0],
+      };
+
       if (!isDemoMode) {
         if (currentUser.role === 'admin') {
           try {
-            await setDoc(doc(db, 'orders', orderId), updatedOrder);
+            const cleanOrder = Object.fromEntries(
+              Object.entries(updatedOrder).filter(([, v]) => v !== undefined)
+            );
+            await setDoc(doc(db, 'orders', orderId), cleanOrder);
           } catch (e) {
             logFirestoreFailure(e, OperationType.UPDATE, 'orders');
           }
         } else if (currentUser.role === 'seller') {
           // Production seller submits an official return inspection ticket for Admin/Treasury final disposition
           try {
-            const returnTicket: SupportTicket = {
-              id: `tkt-ret-${Date.now()}`,
-              ticketNumber: `RET-${Math.floor(1000 + Math.random() * 9000)}`,
-              userId: auth.currentUser?.uid || currentUser.id,
-              userName: currentUser.name,
-              userEmail: currentUser.email,
-              categoryAr: 'توصية فحص مرتجعات التاجر',
-              categoryEn: 'Merchant Return Inspection Report',
-              subject: `تقرير فحص مرتجع الطلب #${target.orderNumber} (${recommendation})`,
-              message: merchantNote.trim() || 'تم فحص حالة المرتجع من قِبل المتجر ورفع التوصية للإدارة.',
-              orderNumber: target.orderNumber,
-              returnRecommendation: recommendation,
-              status: 'open',
-              createdAt: new Date().toISOString().split('T')[0],
-            };
-            await setDoc(doc(db, 'tickets', returnTicket.id), returnTicket);
-            setTickets((prev) => [returnTicket, ...prev]);
+            const cleanTicket = Object.fromEntries(
+              Object.entries(returnTicket).filter(([, v]) => v !== undefined)
+            );
+            await setDoc(doc(db, 'tickets', returnTicket.id), cleanTicket);
           } catch (e) {
             logFirestoreFailure(e, OperationType.CREATE, 'tickets');
           }
         }
       }
 
+      if (currentUser.role === 'seller') {
+        setTickets((prev) => [returnTicket, ...prev]);
+      }
       setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
       showToast(
         lang === 'ar'
@@ -2908,7 +2944,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, orders, lang, showToast]
+    [ensureActiveSellerOrAdmin, currentUser, isDemoMode, orders, lang, showToast]
   );
 
   const submitSellerApplication = useCallback(
@@ -2921,8 +2957,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         );
         return;
       }
+      const effectiveUid = isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id;
       const newSeller: Seller = {
         id: `seller-${Date.now()}`,
+        applicantUserId: effectiveUid,
         nameAr: sellerData.nameAr || 'متجر سعودي جديد',
         nameEn: sellerData.nameEn || 'New Saudi Boutique',
         descriptionAr: sellerData.descriptionAr || 'متجر متخصص في المنتجات الفاخرة.',
@@ -3002,8 +3040,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         >
       >
     ) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) {
-        showToast(lang === 'ar' ? 'غير مصرح بهذا الإجراء' : 'Unauthorized action', undefined, 'error');
+      if (!ensureActiveSellerOrAdmin() || !currentUser) {
         return;
       }
       if (currentUser.role === 'seller' && currentUser.sellerId !== sellerId) {
@@ -3070,9 +3107,29 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const requestSellerPayout = useCallback(
     async (sellerId: string, amount: number) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
+      if (currentUser.role === 'seller' && currentUser.sellerId && currentUser.sellerId !== sellerId) {
+        return;
+      }
       const target = sellers.find((s) => s.id === sellerId);
       if (!target || amount <= 0 || amount > target.availableBalance) return;
+
+      const maskedTargetIban = maskIban(target.iban);
+      const payoutTicket: SupportTicket = {
+        id: `tkt-payout-${Date.now()}`,
+        ticketNumber: `PAY-${Math.floor(1000 + Math.random() * 9000)}`,
+        userId: isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id,
+        userName: `${currentUser.name} (${target.nameAr})`,
+        userEmail: currentUser.email,
+        categoryAr: 'تسوية الأرباح والتحويلات البنكية (سار)',
+        categoryEn: 'Merchant Payout Settlement (SARIE)',
+        subject: `طلب تحويل أرباح متجر (${target.nameAr}) بمبلغ ${amount} ر.س`,
+        message: `طلب تسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المعتمد (${maskedTargetIban}).`,
+        sellerId: target.id,
+        payoutAmount: amount,
+        status: 'open',
+        createdAt: new Date().toISOString().split('T')[0],
+      };
 
       const updated: Seller = {
         ...target,
@@ -3094,7 +3151,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!isDemoMode) {
         if (currentUser.role === 'admin') {
           try {
-            await setDoc(doc(db, 'sellers', sellerId), updated);
+            const cleanSeller = Object.fromEntries(
+              Object.entries(updated).filter(([, v]) => v !== undefined)
+            );
+            await setDoc(doc(db, 'sellers', sellerId), cleanSeller);
           } catch (e) {
             logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
             showToast(
@@ -3108,20 +3168,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           // Sellers cannot directly modify authoritative financial balances in Firestore (`sellers/{sellerId}`);
           // submit a formal settlement request ticket for Admin/backend treasury execution.
           try {
-            const maskedTargetIban = maskIban(target.iban);
-            const payoutTicket: SupportTicket = {
-              id: `tkt-payout-${Date.now()}`,
-              ticketNumber: `PAY-${Math.floor(1000 + Math.random() * 9000)}`,
-              userId: auth.currentUser?.uid || currentUser.id,
-              userName: currentUser.name,
-              userEmail: currentUser.email,
-              categoryAr: 'تسوية الأرباح والتحويلات البنكية (سار)',
-              categoryEn: 'Merchant Payout Settlement (SARIE)',
-              subject: `طلب تحويل أرباح متجر (${target.nameAr}) بمبلغ ${amount} ر.س`,
-              message: `طلب تسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المعتمد (${maskedTargetIban}).`,
-              status: 'open',
-              createdAt: new Date().toISOString().split('T')[0],
-            };
             await setDoc(doc(db, 'tickets', payoutTicket.id), payoutTicket);
             setTickets((prev) => [payoutTicket, ...prev]);
             showToast(
@@ -3146,6 +3192,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
+      // In Demo Mode (or direct Admin execution), record the ticket for Treasury visibility AND update local state
+      if (isDemoMode && currentUser.role === 'seller') {
+        setTickets((prev) => [payoutTicket, ...prev]);
+        showToast(
+          lang === 'ar'
+            ? `تم رفع طلب تسوية الأرباح (${formatPrice(amount)}) للإدارة المالية`
+            : `Payout Request (${formatPrice(amount)}) Submitted to Treasury`,
+          lang === 'ar'
+            ? 'يمكن اعتماد التحويل النهائي عبر قسم تذاكر الدعم والتسويات في لوحة الإدارة'
+            : 'Can be settled via Support Tickets & Treasury in the Admin Console',
+          'success'
+        );
+        return;
+      }
+
       setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
       showToast(
         lang === 'ar'
@@ -3157,7 +3218,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, sellers, formatPrice, lang, showToast]
+    [ensureActiveSellerOrAdmin, currentUser, isDemoMode, sellers, formatPrice, lang, showToast]
   );
 
   // Admin Actions
@@ -3166,36 +3227,101 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser || currentUser.role !== 'admin') return;
       const target = sellers.find((s) => s.id === sellerId);
       if (!target) return;
+
+      const isApproved = status === 'approved';
       const updated: Seller = {
         ...target,
         status,
-        verifiedBadge: status === 'approved',
+        verifiedBadge: isApproved,
       };
+
+      const applicantUid = target.applicantUserId?.trim();
+
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'sellers', sellerId), updated);
+          const batch = writeBatch(db);
+          const cleanSeller = Object.fromEntries(
+            Object.entries(updated).filter(([, v]) => v !== undefined)
+          );
+          batch.set(doc(db, 'sellers', sellerId), cleanSeller);
+
+          if (isApproved && applicantUid) {
+            const applicantRef = doc(db, 'users', applicantUid);
+            const existingApplicant = users.find((u) => u.id === applicantUid);
+            if (existingApplicant) {
+              const activatedUser: UserProfile = {
+                ...existingApplicant,
+                role: 'seller',
+                sellerId: sellerId,
+              };
+              const cleanUser = Object.fromEntries(
+                Object.entries(activatedUser).filter(([, v]) => v !== undefined)
+              );
+              batch.set(applicantRef, cleanUser);
+            } else {
+              const snap = await getDoc(applicantRef);
+              if (snap.exists()) {
+                batch.update(applicantRef, {
+                  role: 'seller',
+                  sellerId: sellerId,
+                });
+              }
+            }
+          }
+
+          await batch.commit();
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
           showToast(lang === 'ar' ? 'تعذر تحديث حالة التاجر' : 'Failed to update seller status', undefined, 'error');
           return;
         }
       }
+
       setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      setProducts((prev) =>
+        prev.map((p) => (p.sellerId === sellerId ? { ...p, sellerVerified: isApproved } : p))
+      );
+
+      if (isApproved && applicantUid) {
+        setUsers((prev) =>
+          prev.map((u) =>
+            u.id === applicantUid ? { ...u, role: 'seller', sellerId: sellerId } : u
+          )
+        );
+        if (currentUser.id === applicantUid) {
+          setCurrentUser((prev) =>
+            prev ? { ...prev, role: 'seller', sellerId: sellerId } : prev
+          );
+        }
+      }
+
       await addAuditLog(
         `تحديث حالة التاجر «${target.nameAr}» إلى (${
-          status === 'approved' ? 'معتمد وموثق' : status === 'suspended' ? 'موقوف مؤقتاً' : status === 'rejected' ? 'مرفوض' : 'قيد المراجعة'
+          status === 'approved'
+            ? 'معتمد وموثق وتفعيل حساب التاجر'
+            : status === 'suspended'
+            ? 'موقوف مؤقتاً'
+            : status === 'rejected'
+            ? 'مرفوض'
+            : 'قيد المراجعة'
         })`,
-        `Updated seller "${target.nameEn}" status to ${status}`,
+        `Updated seller "${target.nameEn}" status to ${status}${
+          isApproved && applicantUid ? ` and activated seller account (${applicantUid})` : ''
+        }`,
         'seller',
         sellerId
       );
       showToast(
         lang === 'ar' ? `تم تحديث حالة متجر ${target.nameAr}` : `Updated ${target.nameEn} status`,
-        undefined,
+        isApproved && applicantUid
+          ? lang === 'ar'
+            ? 'تمت ترقية حساب مقدم الطلب إلى تاجر معتمد وربطه بالمتجر'
+            : 'Applicant account activated with Seller privileges'
+          : undefined,
         'success'
       );
     },
-    [currentUser, isDemoMode, sellers, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, sellers, users, addAuditLog, lang, showToast]
   );
 
   const updateSellerCommissionRate = useCallback(
@@ -3326,68 +3452,163 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser || currentUser.role !== 'admin') return;
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
+
+      // Strict anti-double-refund & state guard:
+      // Only process returns that are currently in 'return_requested' state with 'pending' returnRequest and not already refunded
+      if (
+        target.status !== 'return_requested' ||
+        (target.returnRequest && target.returnRequest.status !== 'pending') ||
+        Boolean(target.returnRequest?.refundProcessedAt)
+      ) {
+        showToast(
+          lang === 'ar'
+            ? 'تمت معالجة طلب الإرجاع هذا مسبقاً ولا يمكن تكرار الاسترداد المالي'
+            : 'This return request has already been processed; duplicate refunds are blocked',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
+      // Reconcile any seller return inspection ticket submitted in production
+      const matchingReturnTicket = tickets.find(
+        (tkt) =>
+          (tkt.orderId === orderId || tkt.orderNumber === target.orderNumber) &&
+          Boolean(tkt.returnRecommendation)
+      );
+
+      const nowIso = new Date().toISOString();
+      const nowDate = nowIso.split('T')[0];
+
+      const mergedReturnRequest = {
+        reasonAr: target.returnRequest?.reasonAr || 'طلب إرجاع منتج',
+        reasonEn: target.returnRequest?.reasonEn || 'Product return request',
+        details: target.returnRequest?.details || '',
+        refundMethod: target.returnRequest?.refundMethod || ('wallet' as const),
+        requestedAt: target.returnRequest?.requestedAt || target.updatedAt,
+        sellerRecommendation:
+          target.returnRequest?.sellerRecommendation || matchingReturnTicket?.returnRecommendation,
+        sellerInspectionNote:
+          target.returnRequest?.sellerInspectionNote || matchingReturnTicket?.message,
+        status: (approve ? 'approved' : 'rejected') as 'approved' | 'rejected',
+        adminNote,
+        resolvedBy: currentUser.name,
+        ...(approve
+          ? {
+              refundProcessedAt: nowIso,
+              refundAmount: target.total,
+            }
+          : {}),
+      };
+
+      const cleanReturnRequest = Object.fromEntries(
+        Object.entries(mergedReturnRequest).filter(([, v]) => v !== undefined)
+      ) as unknown as Order['returnRequest'];
+
       const updated: Order = {
         ...target,
         status: approve ? 'returned' : 'delivered',
-        returnRequest: target.returnRequest
-          ? {
-              ...target.returnRequest,
-              status: approve ? 'approved' : 'rejected',
-              adminNote,
-            }
-          : undefined,
-        updatedAt: new Date().toISOString(),
+        returnRequest: cleanReturnRequest,
+        timeline: buildOrderTimeline(approve ? 'returned' : 'delivered', nowDate),
+        updatedAt: nowIso,
       };
+
+      let updatedCustomer: UserProfile | null = null;
+      if (approve && mergedReturnRequest.refundMethod === 'wallet') {
+        const customerProfile = users.find((u) => u.id === target.customerId);
+        if (customerProfile) {
+          updatedCustomer = {
+            ...customerProfile,
+            walletBalance: Number((customerProfile.walletBalance + target.total).toFixed(2)),
+          };
+        }
+      }
+
       if (!isDemoMode) {
         try {
+          const batch = writeBatch(db);
           const cleanOrder = Object.fromEntries(
             Object.entries(updated).filter(([, v]) => v !== undefined)
           );
-          await setDoc(doc(db, 'orders', orderId), cleanOrder);
+          batch.set(doc(db, 'orders', orderId), cleanOrder);
+
+          if (approve && mergedReturnRequest.refundMethod === 'wallet') {
+            const customerRef = doc(db, 'users', target.customerId);
+            if (updatedCustomer) {
+              const cleanCustomer = Object.fromEntries(
+                Object.entries(updatedCustomer).filter(([, v]) => v !== undefined)
+              );
+              batch.set(customerRef, cleanCustomer);
+            } else {
+              const customerSnap = await getDoc(customerRef);
+              if (customerSnap.exists()) {
+                const currentData = customerSnap.data() as UserProfile;
+                const nextBal = Number(((currentData.walletBalance || 0) + target.total).toFixed(2));
+                batch.update(customerRef, { walletBalance: nextBal });
+                updatedCustomer = { ...currentData, walletBalance: nextBal };
+              }
+            }
+          }
+
+          if (matchingReturnTicket && matchingReturnTicket.status !== 'resolved') {
+            batch.update(doc(db, 'tickets', matchingReturnTicket.id), {
+              status: 'resolved',
+              replyAr: adminNote,
+              replyEn: adminNote,
+              repliedAt: nowDate,
+            });
+          }
+
+          await batch.commit();
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'orders');
           showToast(lang === 'ar' ? 'تعذر معالجة طلب الإرجاع' : 'Failed to process return request', undefined, 'error');
           return;
         }
       }
+
       setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
 
-      // If approved and refundMethod is wallet, credit customer wallet balance
-      if (approve && target.returnRequest?.refundMethod === 'wallet') {
-        const customerProfile = users.find((u) => u.id === target.customerId);
-        if (customerProfile) {
-          const updatedCustomer: UserProfile = {
-            ...customerProfile,
-            walletBalance: Number((customerProfile.walletBalance + target.total).toFixed(2)),
-          };
-          if (!isDemoMode) {
-            try {
-              await setDoc(doc(db, 'users', updatedCustomer.id), updatedCustomer);
-            } catch (e) {
-              logFirestoreFailure(e, OperationType.UPDATE, 'users');
-            }
-          }
-          setUsers((prev) => prev.map((u) => (u.id === updatedCustomer.id ? updatedCustomer : u)));
+      if (updatedCustomer) {
+        setUsers((prev) => prev.map((u) => (u.id === updatedCustomer!.id ? updatedCustomer! : u)));
+        if (currentUser.id === updatedCustomer.id) {
+          setCurrentUser(updatedCustomer);
         }
       }
 
+      if (matchingReturnTicket) {
+        setTickets((prev) =>
+          prev.map((tkt) =>
+            tkt.id === matchingReturnTicket.id
+              ? {
+                  ...tkt,
+                  status: 'resolved',
+                  replyAr: adminNote,
+                  replyEn: adminNote,
+                  repliedAt: nowDate,
+                }
+              : tkt
+          )
+        );
+      }
+
       await addAuditLog(
-        `${approve ? 'الموافقة على إرجاع واسترداد مبلغ' : 'رفض طلب إرجاع'} الطلب #${target.orderNumber}`,
-        `${approve ? 'Approved return & refund for' : 'Declined return for'} Order #${target.orderNumber}`,
+        `${approve ? 'الموافقة على إرجاع واسترداد مبلغ' : 'رفض طلب إرجاع'} الطلب #${target.orderNumber} (${formatPrice(target.total)})`,
+        `${approve ? 'Approved return & refund for' : 'Declined return for'} Order #${target.orderNumber} (${formatPrice(target.total)})`,
         'return',
         orderId
       );
       showToast(
         lang === 'ar'
           ? approve
-            ? `تمت الموافقة على إرجاع الطلب #${target.orderNumber} وإيداع المبلغ في المحفظة`
+            ? `تمت الموافقة على إرجاع الطلب #${target.orderNumber} واسترداد ${formatPrice(target.total)}`
             : `تم رفض طلب الإرجاع للطلب #${target.orderNumber}`
           : `Return request for #${target.orderNumber} processed`,
         undefined,
         'success'
       );
     },
-    [currentUser, isDemoMode, orders, users, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, orders, users, tickets, addAuditLog, formatPrice, lang, showToast]
   );
 
   const adjustCustomerWalletAndLoyalty = useCallback(
@@ -3528,6 +3749,140 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     [currentUser, isDemoMode, tickets, addAuditLog, lang, showToast]
   );
 
+  const settleSellerPayoutTicket = useCallback(
+    async (ticketId: string, adminReferenceNote?: string) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const targetTicket = tickets.find((tkt) => tkt.id === ticketId);
+      if (!targetTicket) return;
+
+      if (targetTicket.status === 'resolved') {
+        showToast(
+          lang === 'ar'
+            ? 'تمت تسوية وإغلاق طلب التحويل هذا مسبقاً'
+            : 'This payout request ticket has already been settled',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
+      // Resolve target seller from ticket.sellerId or matching user/store name
+      const targetSeller =
+        sellers.find((s) => s.id === targetTicket.sellerId) ||
+        sellers.find(
+          (s) =>
+            s.applicantUserId === targetTicket.userId ||
+            targetTicket.subject.includes(s.nameAr) ||
+            targetTicket.userName.includes(s.nameAr)
+        );
+
+      if (!targetSeller) {
+        showToast(
+          lang === 'ar' ? 'تعذر العثور على المتجر المرتبط بطلب التحويل' : 'Could not locate seller for payout ticket',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
+      // Resolve payout amount from ticket.payoutAmount or parse from message/subject
+      let amount = targetTicket.payoutAmount || 0;
+      if (!amount) {
+        const match = (targetTicket.subject + ' ' + targetTicket.message).match(/(\d[\d,]*)/);
+        if (match) {
+          amount = Number(match[1].replace(/,/g, ''));
+        }
+      }
+
+      if (!amount || amount <= 0 || amount > targetSeller.availableBalance) {
+        showToast(
+          lang === 'ar'
+            ? 'مبلغ التسوية غير صالح أو يتجاوز الرصيد المتاح للمتجر'
+            : 'Invalid payout amount or exceeds seller available balance',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
+      const nowDate = new Date().toISOString().split('T')[0];
+      const sarieRef = `SARIE-${Math.floor(100000 + Math.random() * 900000)}`;
+      const maskedSellerIban = maskIban(targetSeller.iban);
+
+      const newPayoutRecord = {
+        id: `pay-${Date.now()}`,
+        amount,
+        status: 'completed' as const,
+        bankNameAr: 'تحويل خزينة أثيل عبر نظام سار (SARIE)',
+        bankNameEn: 'Atheel Treasury SARIE Settlement',
+        ibanLast4: targetSeller.iban.slice(-4),
+        date: nowDate,
+      };
+
+      const updatedSeller: Seller = {
+        ...targetSeller,
+        availableBalance: Number((targetSeller.availableBalance - amount).toFixed(2)),
+        payoutHistory: [newPayoutRecord, ...targetSeller.payoutHistory],
+      };
+
+      const finalReply =
+        adminReferenceNote?.trim() ||
+        (lang === 'ar'
+          ? `تم اعتماد وتحويل مبلغ ${formatPrice(amount)} عبر نظام سار (مرجع: ${sarieRef}) إلى الحساب البنكي المعتمد (${maskedSellerIban}).`
+          : `Approved and settled ${formatPrice(amount)} via SARIE (Ref: ${sarieRef}) to verified account (${maskedSellerIban}).`);
+
+      const updatedTicket: SupportTicket = {
+        ...targetTicket,
+        status: 'resolved',
+        replyAr: finalReply,
+        replyEn: finalReply,
+        repliedAt: nowDate,
+      };
+
+      if (!isDemoMode) {
+        try {
+          const batch = writeBatch(db);
+          const cleanSeller = Object.fromEntries(
+            Object.entries(updatedSeller).filter(([, v]) => v !== undefined)
+          );
+          const cleanTicket = Object.fromEntries(
+            Object.entries(updatedTicket).filter(([, v]) => v !== undefined)
+          );
+          batch.set(doc(db, 'sellers', targetSeller.id), cleanSeller);
+          batch.set(doc(db, 'tickets', ticketId), cleanTicket);
+          await batch.commit();
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
+          showToast(
+            lang === 'ar' ? 'تعذر تنفيذ تسوية التحويل البنكي' : 'Failed to settle seller payout',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setSellers((prev) => prev.map((s) => (s.id === targetSeller.id ? updatedSeller : s)));
+      setTickets((prev) => prev.map((tkt) => (tkt.id === ticketId ? updatedTicket : tkt)));
+
+      await addAuditLog(
+        `اعتماد وتسوية تحويل أرباح متجر «${targetSeller.nameAr}» بمبلغ ${formatPrice(amount)} عبر نظام سار (${sarieRef})`,
+        `Settled SARIE payout of ${formatPrice(amount)} for "${targetSeller.nameEn}" (${sarieRef})`,
+        'seller',
+        targetSeller.id
+      );
+
+      showToast(
+        lang === 'ar'
+          ? `تم اعتماد وتحويل ${formatPrice(amount)} لمتجر ${targetSeller.nameAr}`
+          : `Settled ${formatPrice(amount)} Payout for ${targetSeller.nameEn}`,
+        `${sarieRef} · ${maskedSellerIban}`,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, tickets, sellers, formatPrice, addAuditLog, lang, showToast]
+  );
+
   const moderateReviewStatus = useCallback(
     async (reviewId: string, status: Review['status']) => {
       if (!currentUser || currentUser.role !== 'admin') return;
@@ -3661,9 +4016,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     [currentUser, isDemoMode, addAuditLog, lang, showToast]
   );
 
-  const answerProductQuestion = useCallback(
+    const answerProductQuestion = useCallback(
     async (questionId: string, answerText: string) => {
-      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = questions.find((q) => q.id === questionId);
       if (!target) return;
       const prod = products.find((p) => p.id === target.productId);
@@ -3820,6 +4175,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     processReturnRequest,
     adjustCustomerWalletAndLoyalty,
     replyToSupportTicket,
+    settleSellerPayoutTicket,
     moderateReviewStatus,
     deleteReviewAdmin,
     deleteQuestionAdmin,

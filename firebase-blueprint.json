@@ -48,6 +48,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
+        "applicantUserId": { "type": "string" },
         "nameAr": { "type": "string" },
         "nameEn": { "type": "string" },
         "descriptionAr": { "type": "string" },
@@ -57,6 +58,7 @@
         "crNumber": { "type": "string" },
         "vatNumber": { "type": "string" },
         "status": { "type": "string", "enum": ["approved", "pending", "suspended", "rejected"] },
+        "verifiedBadge": { "type": "boolean" },
         "rating": { "type": "number" },
         "reviewCount": { "type": "number" },
         "commissionRate": { "type": "number" },
@@ -202,7 +204,10 @@
         "userEmail": { "type": "string" },
         "subject": { "type": "string" },
         "message": { "type": "string" },
+        "orderId": { "type": "string" },
         "orderNumber": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "payoutAmount": { "type": "number" },
         "returnRecommendation": { "type": "string" },
         "status": { "type": "string", "enum": ["open", "in_progress", "resolved"] },
         "createdAt": { "type": "string" }
