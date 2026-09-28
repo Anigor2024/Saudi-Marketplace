@@ -231,6 +231,8 @@ export interface ReturnRequest {
   requestedAt: string;
   status: 'pending' | 'approved' | 'rejected';
   adminNote?: string;
+  sellerInspectionNote?: string;
+  sellerRecommendation?: 'approve_restock' | 'inspect_required' | 'dispute';
 }
 
 export type PaymentMethodType = 'mada' | 'apple_pay' | 'visa_mastercard' | 'stc_pay' | 'cod' | 'wallet';
@@ -281,6 +283,9 @@ export interface Review {
   helpfulCount: number;
   createdAt: string;
   status: 'approved' | 'pending' | 'hidden';
+  sellerReplyAr?: string;
+  sellerReplyEn?: string;
+  sellerReplyAt?: string;
 }
 
 export interface ProductQuestion {

@@ -243,9 +243,23 @@ interface MarketplaceContextType {
   deleteProduct: (productId: string) => Promise<void>;
   bulkUpdateProductStatus: (productIds: string[], status: ProductStatus) => Promise<void>;
   updateProductStock: (productId: string, newStock: number, lowStockThreshold?: number) => Promise<void>;
-  updateOrderStatus: (orderId: string, newStatus: OrderStatus, trackingNumber?: string) => Promise<void>;
+  updateOrderStatus: (
+    orderId: string,
+    newStatus: OrderStatus,
+    trackingNumber?: string,
+    carrierAr?: string,
+    carrierEn?: string,
+    fulfillmentNote?: string
+  ) => Promise<void>;
   saveCoupon: (coupon: Coupon) => Promise<void>;
   toggleCouponStatus: (couponId: string) => Promise<void>;
+  deleteCoupon: (couponId: string) => Promise<void>;
+  replyToReview: (reviewId: string, replyText: string) => Promise<void>;
+  respondToReturnRequest: (
+    orderId: string,
+    recommendation: 'approve_restock' | 'inspect_required' | 'dispute',
+    merchantNote: string
+  ) => Promise<void>;
   submitSellerApplication: (sellerData: Partial<Seller>) => Promise<void>;
   updateSellerProfile: (
     sellerId: string,
@@ -2285,6 +2299,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         return;
       }
       const target = products.find((p) => p.id === productId);
+      if (currentUser.role === 'seller' && target && target.sellerId !== currentUser.sellerId) {
+        showToast(
+          lang === 'ar' ? 'لا يمكنك حذف منتج تابع لمتجر آخر' : 'Cannot delete another seller product',
+          undefined,
+          'error'
+        );
+        return;
+      }
       if (!isDemoMode) {
         try {
           await deleteDoc(doc(db, 'products', productId));
@@ -2394,30 +2416,71 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   );
 
   const updateOrderStatus = useCallback(
-    async (orderId: string, newStatus: OrderStatus, trackingNumber?: string) => {
+    async (
+      orderId: string,
+      newStatus: OrderStatus,
+      trackingNumber?: string,
+      carrierAr?: string,
+      carrierEn?: string,
+      fulfillmentNote?: string
+    ) => {
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
+
+      if (currentUser.role === 'seller') {
+        const belongsToSeller =
+          target.sellerIds?.includes(currentUser.sellerId || '') ||
+          target.items.some((item) => item.sellerId === currentUser.sellerId);
+        if (!belongsToSeller) {
+          showToast(
+            lang === 'ar' ? 'لا يمكنك تحديث طلب لا يخص متجرك' : 'Cannot update order not belonging to your store',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
       const nowIso = new Date().toISOString();
       const nowDate = nowIso.split('T')[0];
-      const nextTracking = trackingNumber || target.trackingNumber;
-      const nextTimeline = buildOrderTimeline(newStatus, nowDate);
+      const nextTracking = trackingNumber?.trim() || target.trackingNumber || '';
+      const nextCarrierAr = carrierAr?.trim() || target.carrierAr || 'سبل إكسبريس VIP';
+      const nextCarrierEn = carrierEn?.trim() || target.carrierEn || 'SPL Express VIP';
+      const baseTimeline = buildOrderTimeline(newStatus, nowDate);
+      const nextTimeline = fulfillmentNote?.trim()
+        ? baseTimeline.map((ev) =>
+            ev.status === newStatus
+              ? {
+                  ...ev,
+                  descriptionAr: `${ev.descriptionAr} — ملاحظة التاجر: ${fulfillmentNote.trim()}`,
+                  descriptionEn: `${ev.descriptionEn} — Merchant Note: ${fulfillmentNote.trim()}`,
+                }
+              : ev
+          )
+        : baseTimeline;
+
       const updated: Order = {
         ...target,
         status: newStatus,
         trackingNumber: nextTracking,
+        carrierAr: nextCarrierAr,
+        carrierEn: nextCarrierEn,
         timeline: nextTimeline,
         updatedAt: nowIso,
       };
       if (!isDemoMode) {
         try {
           // Only update fulfillment fields permitted by Firestore seller/admin order rules
-          await updateDoc(doc(db, 'orders', orderId), {
+          const fulfillmentPayload: Record<string, unknown> = {
             status: newStatus,
             trackingNumber: nextTracking,
+            carrierAr: nextCarrierAr,
+            carrierEn: nextCarrierEn,
             timeline: nextTimeline,
             updatedAt: nowIso,
-          });
+          };
+          await updateDoc(doc(db, 'orders', orderId), fulfillmentPayload);
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'orders');
           showToast(
@@ -2439,7 +2502,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         lang === 'ar'
           ? `تم تحديث حالة الطلب #${target.orderNumber}`
           : `Order #${target.orderNumber} Status Updated`,
-        undefined,
+        nextTracking ? `${nextCarrierAr} · ${nextTracking}` : undefined,
         'success'
       );
     },
@@ -2568,6 +2631,146 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       );
     },
     [currentUser, isDemoMode, coupons, lang, showToast]
+  );
+
+  const deleteCoupon = useCallback(
+    async (couponId: string) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      const target = coupons.find((c) => c.id === couponId);
+      if (!target) return;
+      if (currentUser.role === 'seller' && target.sellerId !== currentUser.sellerId) {
+        showToast(
+          lang === 'ar' ? 'لا يمكنك حذف كوبون متجر آخر' : 'Cannot delete another seller coupon',
+          undefined,
+          'error'
+        );
+        return;
+      }
+      if (!isDemoMode) {
+        try {
+          await deleteDoc(doc(db, 'coupons', couponId));
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.DELETE, 'coupons');
+          showToast(lang === 'ar' ? 'تعذر حذف الكوبون' : 'Failed to delete coupon', undefined, 'error');
+          return;
+        }
+      }
+      setCoupons((prev) => prev.filter((c) => c.id !== couponId));
+      await addAuditLog(
+        `حذف كوبون الخصم ${target.code}`,
+        `Deleted coupon ${target.code}`,
+        'coupon',
+        couponId
+      );
+      showToast(
+        lang === 'ar' ? `تم حذف الكوبون ${target.code}` : `Coupon ${target.code} Deleted`,
+        undefined,
+        'info'
+      );
+    },
+    [currentUser, isDemoMode, coupons, addAuditLog, lang, showToast]
+  );
+
+  const replyToReview = useCallback(
+    async (reviewId: string, replyText: string) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      const target = reviews.find((r) => r.id === reviewId);
+      if (!target || !replyText.trim()) return;
+      const prod = products.find((p) => p.id === target.productId);
+      if (currentUser.role === 'seller' && prod && prod.sellerId !== currentUser.sellerId) {
+        showToast(
+          lang === 'ar' ? 'لا يمكنك الرد على تقييم منتج لا يخص متجرك' : 'Cannot reply to review on another seller product',
+          undefined,
+          'error'
+        );
+        return;
+      }
+      const nowDate = new Date().toISOString().split('T')[0];
+      const updated: Review = {
+        ...target,
+        sellerReplyAr: replyText.trim(),
+        sellerReplyEn: replyText.trim(),
+        sellerReplyAt: nowDate,
+      };
+      if (!isDemoMode && currentUser.role === 'admin') {
+        try {
+          await setDoc(doc(db, 'reviews', reviewId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'reviews');
+        }
+      }
+      setReviews((prev) => prev.map((r) => (r.id === reviewId ? updated : r)));
+      showToast(
+        lang === 'ar' ? 'تم نشر رد المتجر الرسمي على التقييم' : 'Official Merchant Reply Published',
+        undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, reviews, products, lang, showToast]
+  );
+
+  const respondToReturnRequest = useCallback(
+    async (
+      orderId: string,
+      recommendation: 'approve_restock' | 'inspect_required' | 'dispute',
+      merchantNote: string
+    ) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      const target = orders.find((o) => o.id === orderId);
+      if (!target || !target.returnRequest) return;
+
+      const belongsToSeller =
+        currentUser.role === 'admin' ||
+        target.sellerIds?.includes(currentUser.sellerId || '') ||
+        target.items.some((item) => item.sellerId === currentUser.sellerId);
+      if (!belongsToSeller) return;
+
+      const updatedOrder: Order = {
+        ...target,
+        returnRequest: {
+          ...target.returnRequest,
+          sellerRecommendation: recommendation,
+          sellerInspectionNote: merchantNote.trim(),
+        },
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (!isDemoMode && currentUser.role === 'seller') {
+        // Production seller submits an official return inspection ticket for Admin/Treasury final disposition
+        try {
+          const returnTicket: SupportTicket = {
+            id: `tkt-ret-${Date.now()}`,
+            ticketNumber: `RET-${Math.floor(1000 + Math.random() * 9000)}`,
+            userId: auth.currentUser?.uid || currentUser.id,
+            userName: currentUser.name,
+            userEmail: currentUser.email,
+            categoryAr: 'توصية فحص مرتجعات التاجر',
+            categoryEn: 'Merchant Return Inspection Report',
+            subject: `تقرير فحص مرتجع الطلب #${target.orderNumber} (${recommendation})`,
+            message: merchantNote.trim() || 'تم فحص حالة المرتجع من قِبل المتجر ورفع التوصية للإدارة.',
+            orderNumber: target.orderNumber,
+            status: 'open',
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          await setDoc(doc(db, 'tickets', returnTicket.id), returnTicket);
+          setTickets((prev) => [returnTicket, ...prev]);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+        }
+      }
+
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? updatedOrder : o)));
+      showToast(
+        lang === 'ar'
+          ? `تم تسجيل قرار فحص المرتجع للطلب #${target.orderNumber}`
+          : `Return Inspection Recorded for #${target.orderNumber}`,
+        lang === 'ar'
+          ? 'تم إرفاق ملاحظات الفحص الفني وإشعار فريق التسويات وحماية المشتري'
+          : 'Inspection notes attached and forwarded to Marketplace Settlement team',
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, orders, lang, showToast]
   );
 
   const submitSellerApplication = useCallback(
@@ -2960,12 +3163,22 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = questions.find((q) => q.id === questionId);
       if (!target) return;
+      const prod = products.find((p) => p.id === target.productId);
+      if (currentUser.role === 'seller' && prod && prod.sellerId !== currentUser.sellerId) {
+        showToast(
+          lang === 'ar' ? 'لا يمكنك الإجابة على سؤال لمنتج لا يخص متجرك' : 'Cannot answer question for another seller product',
+          undefined,
+          'error'
+        );
+        return;
+      }
+      const sellerDoc = sellers.find((s) => s.id === (prod?.sellerId || currentUser.sellerId));
       const updated: ProductQuestion = {
         ...target,
         answerAr: answerText,
         answerEn: answerText,
-        answeredByAr: currentUser.name || 'إدارة أثيل',
-        answeredByEn: currentUser.name || 'Atheel Concierge',
+        answeredByAr: sellerDoc ? `${sellerDoc.nameAr} (تاجر معتمد)` : currentUser.name || 'إدارة أثيل',
+        answeredByEn: sellerDoc ? `${sellerDoc.nameEn} (Verified Seller)` : currentUser.name || 'Atheel Concierge',
       };
       if (!isDemoMode) {
         try {
@@ -2983,7 +3196,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, questions, lang, showToast]
+    [currentUser, isDemoMode, questions, products, sellers, lang, showToast]
   );
 
   const value: MarketplaceContextType = {
@@ -3083,6 +3296,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     updateOrderStatus,
     saveCoupon,
     toggleCouponStatus,
+    deleteCoupon,
+    replyToReview,
+    respondToReturnRequest,
     submitSellerApplication,
     updateSellerProfile,
     requestSellerPayout,
