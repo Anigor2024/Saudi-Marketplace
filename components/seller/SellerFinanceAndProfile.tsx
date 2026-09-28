@@ -19,7 +19,7 @@ import {
   Download,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
-import { Order, Seller } from '@/lib/types';
+import { Order, Seller, SupportTicket } from '@/lib/types';
 import { maskIban, maskIbanInText } from '@/lib/utils';
 
 interface SellerFinanceAndProfileProps {
@@ -315,6 +315,31 @@ export default function SellerFinanceAndProfile({
   // RENDER: PAYOUTS & SARIE BANK SETTLEMENTS
   // ============================================================================
   if (mode === 'payouts') {
+    const sellerPayoutTickets = tickets.filter(
+      (tkt) =>
+        (tkt.workflowType === 'payout' || tkt.ticketNumber.startsWith('PAY-')) &&
+        (tkt.sellerId === seller.id || tkt.subject.includes(seller.nameAr))
+    );
+
+    const getTreasuryBadgeLabel = (status?: SupportTicket['treasuryStatus']) => {
+      switch (status) {
+        case 'under_review':
+          return t('قيد المراجعة المالية (under_review)', 'Under Financial Review');
+        case 'approved_for_treasury':
+          return t(
+            'معتمد للرفع للخزينة — بانتظار التسوية البنكية الخارجية',
+            'Approved for Treasury — Awaiting External Bank Settlement'
+          );
+        case 'completed':
+          return t('مكتمل دفترياً (completed)', 'Completed in Ledger');
+        case 'rejected':
+          return t('مرفوض (rejected)', 'Rejected');
+        case 'requested':
+        default:
+          return t('طلب مسجل بانتظار المراجعة (requested)', 'Requested — Awaiting Audit');
+      }
+    };
+
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -323,10 +348,10 @@ export default function SellerFinanceAndProfile({
             <div className="flex items-center justify-between">
               <div>
                 <span className="px-2.5 py-0.5 rounded-md bg-[#FBF7EC] text-[#B8860B] border border-[#C59B27]/40 text-[11px] font-bold">
-                  {t('نظام التحويلات السريعة (سار SARIE)', 'SARIE Instant Bank Settlement')}
+                  {t('مسار تسويات الخزينة المهيكل', 'Structured Treasury Payout Workflow')}
                 </span>
                 <h2 className="text-lg font-bold text-[#141413] mt-1">
-                  {t('طلب تسوية وتحويل الأرباح للبنك', 'Request Merchant Payout')}
+                  {t('طلب مراجعة وتسوية الأرباح للخزينة', 'Request Merchant Treasury Payout')}
                 </h2>
               </div>
               <Wallet className="w-8 h-8 text-[#0B4F3F]" />
@@ -334,20 +359,20 @@ export default function SellerFinanceAndProfile({
 
             <div className="p-4 rounded-xl bg-[#0B4F3F] text-white space-y-1">
               <span className="text-xs text-[#F5E6C8]">
-                {t('الرصيد المتاح للسحب الفوري', 'Available Balance for Immediate Settlement')}
+                {t('الرصيد المتاح لطلب التسوية', 'Available Balance for Treasury Request')}
               </span>
               <div className="text-2xl font-bold font-mono">
                 {formatPrice(seller.availableBalance)}
               </div>
               <div className="text-[11px] text-[#C59B27] font-mono">
-                {t('موعد التسوية الدورية القادمة:', 'Next Scheduled Auto-Payout:')}{' '}
+                {t('موعد دورة التسوية القادمة:', 'Next Scheduled Settlement Cycle:')}{' '}
                 {seller.nextPayoutDate}
               </div>
             </div>
 
             <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-1 text-xs">
               <div className="text-[#8C857B]">
-                {t('الحساب البنكي المعتمد (آيبان سعودي):', 'Verified Saudi IBAN Beneficiary:')}
+                {t('الحساب البنكي المعتمد (يُحفظ آخر ٤ أرقام فقط في التذكرة):', 'Verified Saudi IBAN (only last 4 digits stored in ticket):')}
               </div>
               <div className="font-bold text-[#141413]">{seller.ownerName}</div>
               <div className="font-mono font-bold text-[#0B4F3F]" dir="ltr">
@@ -359,7 +384,7 @@ export default function SellerFinanceAndProfile({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-bold text-[#141413]">
-                    {t('مبلغ التحويل المطلوب (ر.س)', 'Payout Amount (SAR)')}
+                    {t('مبلغ التسوية المطلوب (ر.س)', 'Requested Payout Amount (SAR)')}
                   </label>
                   <button
                     type="button"
@@ -390,8 +415,8 @@ export default function SellerFinanceAndProfile({
                 className="w-full py-3 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] disabled:opacity-40 text-white text-xs font-bold shadow-xs"
               >
                 {t(
-                  `تأكيد طلب تحويل (${formatPrice(payoutAmount)}) عبر نظام سار`,
-                  `Submit SARIE Payout Request (${formatPrice(payoutAmount)})`
+                  `رفع طلب تسوية خزينة (${formatPrice(payoutAmount)})`,
+                  `Submit Treasury Payout Request (${formatPrice(payoutAmount)})`
                 )}
               </button>
 
@@ -399,8 +424,8 @@ export default function SellerFinanceAndProfile({
                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
                   {t(
-                    'حماية الأرصدة المالية: الأرصدة الفعلية وسجل التحويلات محمية ضد التعديل المباشر من المتصفح، وتُنفّذ عبر الخزانة المركزية.',
-                    'Financial Protection: Authoritative balances and payout histories are protected by Firestore rules and executed by Executive Treasury.'
+                    'ضمان أمان الخزينة: يُنشئ هذا الإجراء تذكرة تسوية مهيكلة (workflowType = payout) مع حفظ آخر ٤ أرقام فقط من الآيبان دون تنفيذ تحويل بنكي خارجي تلقائي.',
+                    'Treasury Safety: Submitting creates a structured payout ticket (ibanLast4 only, treasuryStatus = requested) for financial audit and external bank execution.'
                   )}
                 </span>
               </div>
@@ -412,51 +437,59 @@ export default function SellerFinanceAndProfile({
             <div className="flex items-center justify-between border-b border-[#E6E0D6] pb-3">
               <div>
                 <h3 className="text-base font-bold text-[#141413]">
-                  {t('سجل التحويلات البنكية وطلبات التسوية', 'Bank Payouts & Treasury Settlement Requests')}
+                  {t('طلبات تسوية الخزينة وسجل الدفعات السابقة', 'Treasury Payout Requests & Historical Ledger')}
                 </h3>
                 <p className="text-xs text-[#57534E]">
                   {t(
-                    'جميع الحوالات البنكية المنفذة وطلبات السحب المرفوعة للخزانة المركزية.',
-                    'All SARIE bank transfers and active treasury payout requests.'
+                    'متابعة حالة طلبات التسوية المهيكلة المرفوعة للخزينة والدفعات التاريخية الموثقة.',
+                    'Track structured treasury payout requests and historical settlement records.'
                   )}
                 </p>
               </div>
               <span className="font-mono text-xs font-bold text-[#0B4F3F]">
-                {seller.payoutHistory.length} {t('حوالة', 'transfers')}
+                {sellerPayoutTickets.length + seller.payoutHistory.length}{' '}
+                {t('سجل', 'records')}
               </span>
             </div>
 
-            {/* Active Production Treasury Payout Requests */}
-            {tickets
-              .filter(
-                (tkt) =>
-                  tkt.ticketNumber.startsWith('PAY-') &&
-                  (tkt.subject.includes(seller.nameAr) ||
-                    tkt.message.includes(maskIban(seller.iban)) ||
-                    tkt.message.includes(seller.iban))
-              )
-              .map((tkt) => (
-                <div
-                  key={tkt.id}
-                  className="p-4 rounded-xl bg-[#FBF7EC] border border-[#C59B27]/50 flex flex-wrap items-center justify-between gap-3 text-xs"
-                >
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-[#141413]">#{tkt.ticketNumber}</span>
-                      <span className="px-2 py-0.5 rounded bg-amber-100 text-[#C87D12] text-[10px] font-bold uppercase">
-                        {t('طلب تسوية قيد المراجعة المالية', 'Pending Treasury Settlement')}
+            {/* Active Structured Treasury Payout Requests */}
+            {sellerPayoutTickets.map((tkt) => (
+              <div
+                key={tkt.id}
+                className="p-4 rounded-xl bg-[#FBF7EC] border border-[#C59B27]/50 flex flex-wrap items-center justify-between gap-3 text-xs"
+              >
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono font-bold text-[#141413]">#{tkt.ticketNumber}</span>
+                    <span className="px-2 py-0.5 rounded bg-amber-100 text-[#C87D12] text-[10px] font-bold">
+                      {getTreasuryBadgeLabel(tkt.treasuryStatus)}
+                    </span>
+                    {tkt.ibanLast4 && (
+                      <span className="font-mono text-[11px] text-[#57534E]" dir="ltr">
+                        IBAN: SA•• •••• •••• •••• •••• {tkt.ibanLast4}
                       </span>
-                    </div>
-                    <div className="font-semibold text-[#141413]">{tkt.subject}</div>
-                    <div className="text-[11px] text-[#57534E]">
-                      {maskIbanInText(tkt.message)}
-                    </div>
+                    )}
                   </div>
-                  <div className="text-end font-mono text-[11px] text-[#8C857B]">
-                    {tkt.createdAt}
+                  <div className="font-semibold text-[#141413]">{tkt.subject}</div>
+                  <div className="text-[11px] text-[#57534E]">
+                    {maskIbanInText(tkt.message)}
                   </div>
+                  {tkt.replyAr && (
+                    <div className="text-[11px] text-[#0B4F3F] font-semibold pt-1">
+                      {t('ملاحظة الخزينة:', 'Treasury Note:')} {tkt.replyAr}
+                    </div>
+                  )}
                 </div>
-              ))}
+                <div className="text-end font-mono">
+                  {tkt.payoutAmount ? (
+                    <div className="text-sm font-bold text-[#0B4F3F]">
+                      {formatPrice(tkt.payoutAmount)}
+                    </div>
+                  ) : null}
+                  <div className="text-[11px] text-[#8C857B]">{tkt.createdAt}</div>
+                </div>
+              </div>
+            ))}
 
             {seller.payoutHistory.length === 0 ? (
               <div className="p-8 text-center text-xs text-[#8C857B]">

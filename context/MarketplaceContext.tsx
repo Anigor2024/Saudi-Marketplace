@@ -31,6 +31,9 @@ import {
   Product,
   ProductStatus,
   Seller,
+  PublicSellerProfile,
+  toPublicSellerProfile,
+  publicProfileToStorefrontSeller,
   SellerStatus,
   CartItem,
   Coupon,
@@ -50,6 +53,7 @@ import {
   INITIAL_CATEGORIES,
   INITIAL_BRANDS,
   INITIAL_SELLERS,
+  INITIAL_PUBLIC_SELLERS,
   INITIAL_COUPONS,
   INITIAL_USERS,
   INITIAL_ORDERS,
@@ -147,6 +151,8 @@ interface MarketplaceContextType {
   categories: Category[];
   brands: Brand[];
   products: Product[];
+  publicSellers: PublicSellerProfile[];
+  privateSellers: Seller[];
   sellers: Seller[];
   coupons: Coupon[];
   orders: Order[];
@@ -507,10 +513,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [pendingRedirectView, setPendingRedirectView] = useState<AppView | null>(null);
 
   // Collections State
+  // Public vs Private Seller Data Boundary:
+  // - `publicSellers` holds ONLY marketplace-safe `PublicSellerProfile` records from `sellerPublicProfiles`
+  // - `privateSellers` holds full private `Seller` documents loaded ONLY for authenticated Admin, linked Seller, or Applicant
   const [categories] = useState<Category[]>(INITIAL_CATEGORIES);
   const [brands] = useState<Brand[]>(INITIAL_BRANDS);
   const [products, setProducts] = useState<Product[]>(INITIAL_ALL_PRODUCTS);
-  const [sellers, setSellers] = useState<Seller[]>(INITIAL_SELLERS);
+  const [publicSellers, setPublicSellers] = useState<PublicSellerProfile[]>(INITIAL_PUBLIC_SELLERS);
+  const [privateSellers, setPrivateSellers] = useState<Seller[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>(INITIAL_COUPONS);
   const [orders, setOrders] = useState<Order[]>([]);
   const [reviews, setReviews] = useState<Review[]>(INITIAL_REVIEWS);
@@ -681,6 +691,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           // Preserve in-memory user only if Demo Mode was explicitly activated
           return isDemoMode ? prev : null;
         });
+        if (!isDemoMode) {
+          setPrivateSellers([]);
+        }
       }
       setIsAuthLoading(false);
     });
@@ -688,7 +701,35 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     return () => unsubAuth();
   }, [buildDefaultCustomerProfile, isDemoMode]);
 
-  // 2. Public Firestore Listeners (Safe for all visitors)
+  // Unified `sellers` view respecting the strict Public / Private Seller Data Boundary:
+  // - In isolated Demo Mode: uses in-memory `privateSellers` (seeded from INITIAL_SELLERS)
+  // - When authenticated Admin: uses full `privateSellers` loaded from `/sellers`
+  // - For public visitors, customers, and sellers: starts from `publicSellers` (projected without any private fields)
+  //   and overlays only the caller's own authorized `privateSellers` document(s) if present.
+  const sellers = useMemo<Seller[]>(() => {
+    if (isDemoMode) {
+      return privateSellers.length > 0 ? privateSellers : INITIAL_SELLERS;
+    }
+    if (currentUser?.role === 'admin') {
+      return privateSellers.length > 0 ? privateSellers : INITIAL_SELLERS;
+    }
+    const privateById = new Map<string, Seller>();
+    for (const priv of privateSellers) {
+      privateById.set(priv.id, priv);
+    }
+    const merged: Seller[] = publicSellers
+      .filter((pub) => pub.status === 'approved')
+      .map((pub) => privateById.get(pub.id) ?? publicProfileToStorefrontSeller(pub));
+
+    for (const priv of privateSellers) {
+      if (!merged.some((s) => s.id === priv.id)) {
+        merged.push(priv);
+      }
+    }
+    return merged;
+  }, [isDemoMode, currentUser, publicSellers, privateSellers]);
+
+  // 2. Public Firestore Listeners (Safe for all visitors — uses `sellerPublicProfiles`, NEVER `/sellers`)
   useEffect(() => {
     const unsubProducts = onSnapshot(
       query(collection(db, 'products'), where('status', 'in', ['active', 'out_of_stock'])),
@@ -710,14 +751,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
     );
 
-    const unsubSellers = onSnapshot(
-      collection(db, 'sellers'),
+    const unsubPublicSellers = onSnapshot(
+      query(collection(db, 'sellerPublicProfiles'), where('status', '==', 'approved')),
       (snap) => {
         if (!snap.empty) {
-          setSellers(snap.docs.map((d) => d.data() as Seller));
+          setPublicSellers(
+            snap.docs.map((d) => toPublicSellerProfile(d.data() as PublicSellerProfile))
+          );
         }
       },
-      (err) => logFirestoreFailure(err, OperationType.LIST, 'sellers')
+      (err) => logFirestoreFailure(err, OperationType.LIST, 'sellerPublicProfiles')
     );
 
     const unsubCoupons = onSnapshot(
@@ -762,7 +805,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
     return () => {
       unsubProducts();
-      unsubSellers();
+      unsubPublicSellers();
       unsubCoupons();
       unsubReviews();
       unsubQuestions();
@@ -770,12 +813,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     };
   }, []);
 
-  // 3. Authenticated / Role-Scoped Listeners (Orders & Audit Logs)
+  // 3. Authenticated / Role-Scoped Listeners (Private Sellers, Orders, Tickets & Audit Logs)
   useEffect(() => {
     if (isDemoMode || !currentUser || !auth.currentUser) {
       return;
     }
 
+    let unsubPrivateSellers: (() => void) | undefined;
     let unsubOrders: (() => void) | undefined;
     let unsubLogs: (() => void) | undefined;
     let unsubAllProducts: (() => void) | undefined;
@@ -784,6 +828,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     let unsubAllUsers: (() => void) | undefined;
 
     if (currentUser.role === 'admin') {
+      unsubPrivateSellers = onSnapshot(
+        collection(db, 'sellers'),
+        (snap) => {
+          if (!snap.empty) {
+            setPrivateSellers(snap.docs.map((d) => d.data() as Seller));
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'sellers')
+      );
+
       unsubOrders = onSnapshot(
         collection(db, 'orders'),
         (snap) => {
@@ -854,6 +908,18 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         (err) => logFirestoreFailure(err, OperationType.LIST, 'users')
       );
     } else if (currentUser.role === 'seller' && currentUser.sellerId) {
+      // Load ONLY the authenticated Seller's own private Seller document (works even if suspended so seller can read status)
+      const sellerDocId = currentUser.sellerId;
+      unsubPrivateSellers = onSnapshot(
+        doc(db, 'sellers', sellerDocId),
+        (snap) => {
+          if (snap.exists()) {
+            setPrivateSellers([snap.data() as Seller]);
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.GET, `sellers/${sellerDocId}`)
+      );
+
       unsubOrders = onSnapshot(
         query(collection(db, 'orders'), where('sellerIds', 'array-contains', currentUser.sellerId)),
         (snap) => {
@@ -863,7 +929,26 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
       );
+
+      unsubAllTickets = onSnapshot(
+        query(collection(db, 'tickets'), where('userId', '==', auth.currentUser.uid)),
+        (snap) => {
+          if (!snap.empty) {
+            setTickets(snap.docs.map((d) => d.data() as SupportTicket));
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'tickets')
+      );
     } else {
+      // Authenticated customer: load own orders, own tickets, and any pending seller application they submitted
+      unsubPrivateSellers = onSnapshot(
+        query(collection(db, 'sellers'), where('applicantUserId', '==', auth.currentUser.uid)),
+        (snap) => {
+          setPrivateSellers(snap.docs.map((d) => d.data() as Seller));
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'sellers')
+      );
+
       unsubOrders = onSnapshot(
         query(collection(db, 'orders'), where('customerId', '==', auth.currentUser.uid)),
         (snap) => {
@@ -873,9 +958,20 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
       );
+
+      unsubAllTickets = onSnapshot(
+        query(collection(db, 'tickets'), where('userId', '==', auth.currentUser.uid)),
+        (snap) => {
+          if (!snap.empty) {
+            setTickets(snap.docs.map((d) => d.data() as SupportTicket));
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'tickets')
+      );
     }
 
     return () => {
+      unsubPrivateSellers?.();
       unsubOrders?.();
       unsubLogs?.();
       unsubAllProducts?.();
@@ -1038,6 +1134,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       setIsDemoMode(true);
       setCurrentUser({ ...targetUser });
+      setPrivateSellers((prev) => (prev.length > 0 ? prev : INITIAL_SELLERS));
       setOrders(INITIAL_ORDERS);
       setAuditLogs(INITIAL_AUDIT_LOGS);
 
@@ -1075,6 +1172,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const exitDemoMode = useCallback(() => {
     setIsDemoMode(false);
     setCurrentUser(null);
+    setPrivateSellers([]);
     setOrders([]);
     setAuditLogs([]);
     showToast(
@@ -3013,7 +3111,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
-      setSellers((prev) => [newSeller, ...prev]);
+      // Pending applications are private only — never added to publicSellers until Admin approval
+      setPrivateSellers((prev) => [newSeller, ...prev]);
       showToast(
         lang === 'ar'
           ? 'تم إرسال طلب انضمام المتجر للاعتماد'
@@ -3061,7 +3160,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         );
         return;
       }
-      const target = sellers.find((s) => s.id === sellerId);
+      const target =
+        privateSellers.find((s) => s.id === sellerId) || sellers.find((s) => s.id === sellerId);
       if (!target) return;
 
       // Strictly whitelist only safe business/profile/operational fields; never allow financial or approval fields
@@ -3089,9 +3189,43 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
+      // Extract ONLY public-safe presentation fields for synchronizing `sellerPublicProfiles/{sellerId}`
+      // Never copy private fields (phone, email, iban, ownerName, crNumber, vatNumber, operationalSettings, financials)
+      const publicPresentationKeys = [
+        'nameAr',
+        'nameEn',
+        'descriptionAr',
+        'descriptionEn',
+        'cityAr',
+        'cityEn',
+        'categories',
+      ] as const;
+      const publicAllowedUpdates: Record<string, unknown> = {};
+      for (const pubKey of publicPresentationKeys) {
+        if (safeUpdates[pubKey] !== undefined) {
+          publicAllowedUpdates[pubKey] = safeUpdates[pubKey];
+        }
+      }
+
+      const mergedSeller = { ...target, ...allowedPayload } as Seller;
+
       if (!isDemoMode) {
         try {
           await updateDoc(doc(db, 'sellers', sellerId), allowedPayload);
+          if (mergedSeller.status === 'approved' && Object.keys(publicAllowedUpdates).length > 0) {
+            if (currentUser.role === 'admin') {
+              await setDoc(
+                doc(db, 'sellerPublicProfiles', sellerId),
+                toPublicSellerProfile(mergedSeller)
+              );
+            } else {
+              try {
+                await updateDoc(doc(db, 'sellerPublicProfiles', sellerId), publicAllowedUpdates);
+              } catch {
+                // Public profile document may not yet exist if not created by Admin; private seller profile update succeeded
+              }
+            }
+          }
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
           showToast(
@@ -3103,16 +3237,26 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
-      setSellers((prev) =>
-        prev.map((s) => (s.id === sellerId ? ({ ...s, ...allowedPayload } as Seller) : s))
+      setPrivateSellers((prev) =>
+        prev.some((s) => s.id === sellerId)
+          ? prev.map((s) => (s.id === sellerId ? mergedSeller : s))
+          : [mergedSeller, ...prev]
       );
+      if (mergedSeller.status === 'approved') {
+        const nextPub = toPublicSellerProfile(mergedSeller);
+        setPublicSellers((prev) =>
+          prev.some((p) => p.id === sellerId)
+            ? prev.map((p) => (p.id === sellerId ? nextPub : p))
+            : [nextPub, ...prev]
+        );
+      }
       showToast(
         lang === 'ar' ? 'تم تحديث بيانات المتجر بنجاح' : 'Seller Profile Updated',
         undefined,
         'success'
       );
     },
-    [currentUser, isDemoMode, sellers, lang, showToast]
+    [ensureActiveSellerOrAdmin, currentUser, isDemoMode, privateSellers, sellers, lang, showToast]
   );
 
   const requestSellerPayout = useCallback(
@@ -3121,9 +3265,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (currentUser.role === 'seller' && currentUser.sellerId && currentUser.sellerId !== sellerId) {
         return;
       }
-      const target = sellers.find((s) => s.id === sellerId);
+      const target =
+        privateSellers.find((s) => s.id === sellerId) || sellers.find((s) => s.id === sellerId);
       if (!target || amount <= 0 || amount > target.availableBalance) return;
 
+      // Treasury safety invariant:
+      // Submitting a payout request creates ONLY a structured `payout` ticket with `ibanLast4` and `treasuryStatus = 'requested'`.
+      // It NEVER stores the full IBAN in the ticket and NEVER pretends an external bank wire occurred or deducts `availableBalance`.
       const maskedTargetIban = maskIban(target.iban);
       const ibanLast4Digits = target.iban.replace(/\s+/g, '').slice(-4);
       const payoutTicket: SupportTicket = {
@@ -3132,10 +3280,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         userId: isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id,
         userName: `${currentUser.name} (${target.nameAr})`,
         userEmail: currentUser.email,
-        categoryAr: 'تسوية الأرباح والتحويلات البنكية (سار)',
-        categoryEn: 'Merchant Payout Settlement (SARIE)',
-        subject: `طلب تحويل أرباح متجر (${target.nameAr}) بمبلغ ${amount} ر.س`,
-        message: `طلب تسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المعتمد (${maskedTargetIban}).`,
+        categoryAr: 'طلب تسوية خزينة (Payout Request)',
+        categoryEn: 'Merchant Payout Treasury Request',
+        subject: `طلب تسوية أرباح متجر (${target.nameAr}) بمبلغ ${amount} ر.س`,
+        message: `طلب مراجعة وتسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المسجل (${maskedTargetIban}).`,
         workflowType: 'payout',
         sellerId: target.id,
         payoutAmount: amount,
@@ -3145,101 +3293,43 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         createdAt: new Date().toISOString().split('T')[0],
       };
 
-      const updated: Seller = {
-        ...target,
-        availableBalance: target.availableBalance - amount,
-        payoutHistory: [
-          {
-            id: `pay-${Date.now()}`,
-            amount,
-            status: 'processing',
-            bankNameAr: 'البنك الأهلي السعودي SNB (تحويل سريع سار)',
-            bankNameEn: 'Saudi National Bank (SARIE Transfer)',
-            ibanLast4: target.iban.slice(-4),
-            date: new Date().toISOString().split('T')[0],
-          },
-          ...target.payoutHistory,
-        ],
-      };
-
       if (!isDemoMode) {
-        if (currentUser.role === 'admin') {
-          try {
-            const cleanSeller = Object.fromEntries(
-              Object.entries(updated).filter(([, v]) => v !== undefined)
-            );
-            await setDoc(doc(db, 'sellers', sellerId), cleanSeller);
-          } catch (e) {
-            logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
-            showToast(
-              lang === 'ar' ? 'تعذر تنفيذ تسوية الأرباح' : 'Failed to process payout',
-              undefined,
-              'error'
-            );
-            return;
-          }
-        } else {
-          // Sellers cannot directly modify authoritative financial balances in Firestore (`sellers/{sellerId}`);
-          // submit a formal settlement request ticket for Admin/backend treasury execution.
-          try {
-            await setDoc(doc(db, 'tickets', payoutTicket.id), payoutTicket);
-            setTickets((prev) => [payoutTicket, ...prev]);
-            showToast(
-              lang === 'ar'
-                ? `تم رفع طلب تسوية الأرباح (${formatPrice(amount)}) للإدارة المالية`
-                : `Payout Request (${formatPrice(amount)}) Submitted to Treasury`,
-              lang === 'ar'
-                ? 'الأرصدة المالية محمية وتتم تسويتها واعتمادها عبر الإدارة المالية ونظام سار'
-                : 'Financial balances are protected and settled by Executive Treasury',
-              'success'
-            );
-            return;
-          } catch (e) {
-            logFirestoreFailure(e, OperationType.CREATE, 'tickets');
-            showToast(
-              lang === 'ar' ? 'تعذر إرسال طلب تحويل الأرباح' : 'Failed to submit payout request',
-              undefined,
-              'error'
-            );
-            return;
-          }
+        try {
+          const cleanTicket = Object.fromEntries(
+            Object.entries(payoutTicket).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'tickets', payoutTicket.id), cleanTicket);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+          showToast(
+            lang === 'ar' ? 'تعذر إرسال طلب تسوية الأرباح' : 'Failed to submit payout request',
+            undefined,
+            'error'
+          );
+          return;
         }
       }
 
-      // In Demo Mode (or direct Admin execution), record the ticket for Treasury visibility AND update local state
-      if (isDemoMode && currentUser.role === 'seller') {
-        setTickets((prev) => [payoutTicket, ...prev]);
-        showToast(
-          lang === 'ar'
-            ? `تم رفع طلب تسوية الأرباح (${formatPrice(amount)}) للإدارة المالية`
-            : `Payout Request (${formatPrice(amount)}) Submitted to Treasury`,
-          lang === 'ar'
-            ? 'يمكن اعتماد التحويل النهائي عبر قسم تذاكر الدعم والتسويات في لوحة الإدارة'
-            : 'Can be settled via Support Tickets & Treasury in the Admin Console',
-          'success'
-        );
-        return;
-      }
-
-      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      setTickets((prev) => [payoutTicket, ...prev]);
       showToast(
         lang === 'ar'
-          ? `تم طلب تحويل الأرباح (${formatPrice(amount)})`
-          : `Payout of ${formatPrice(amount)} Initiated`,
+          ? `تم تسجيل طلب تسوية الأرباح (${formatPrice(amount)}) في الخزينة (#${payoutTicket.ticketNumber})`
+          : `Payout Request (${formatPrice(amount)}) Logged for Treasury Review (#${payoutTicket.ticketNumber})`,
         lang === 'ar'
-          ? 'سيتم إيداع المبلغ في حسابكم البنكي عبر نظام سار خلال ٢٤ ساعة'
-          : 'Funds will arrive via SARIE within 24 hours',
+          ? 'تم حفظ الطلب بحالة (requested) بانتظار المراجعة المالية والتسوية البنكية الخارجية'
+          : 'Recorded with treasuryStatus = requested awaiting financial audit and external bank settlement',
         'success'
       );
     },
-    [ensureActiveSellerOrAdmin, currentUser, isDemoMode, sellers, formatPrice, lang, showToast]
+    [ensureActiveSellerOrAdmin, currentUser, isDemoMode, privateSellers, sellers, formatPrice, lang, showToast]
   );
 
   // Admin Actions
   const updateSellerStatus = useCallback(
     async (sellerId: string, status: SellerStatus) => {
       if (!currentUser || currentUser.role !== 'admin') return;
-      const target = sellers.find((s) => s.id === sellerId);
+      const target =
+        privateSellers.find((s) => s.id === sellerId) || sellers.find((s) => s.id === sellerId);
       if (!target) return;
 
       const isApproved = status === 'approved';
@@ -3292,6 +3382,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         status,
         verifiedBadge: isApproved,
       };
+      const publicProjection: PublicSellerProfile = toPublicSellerProfile(updated);
 
       if (!isDemoMode) {
         try {
@@ -3300,6 +3391,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             Object.entries(updated).filter(([, v]) => v !== undefined)
           );
           batch.set(doc(db, 'sellers', sellerId), cleanSeller);
+
+          // Synchronize `sellerPublicProfiles/{sellerId}` in the same atomic batch:
+          // - When approved: creates/updates the public profile with status = 'approved'
+          // - When suspended/rejected/pending: marks status non-approved so public rules & queries immediately exclude it
+          batch.set(doc(db, 'sellerPublicProfiles', sellerId), publicProjection);
 
           if (isApproved && applicantUid && verifiedApplicantUser) {
             const applicantRef = doc(db, 'users', applicantUid);
@@ -3322,7 +3418,20 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
-      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      setPrivateSellers((prev) => {
+        const base = prev.length > 0 ? prev : INITIAL_SELLERS;
+        return base.some((s) => s.id === sellerId)
+          ? base.map((s) => (s.id === sellerId ? updated : s))
+          : [updated, ...base];
+      });
+      setPublicSellers((prev) => {
+        if (isApproved) {
+          return prev.some((p) => p.id === sellerId)
+            ? prev.map((p) => (p.id === sellerId ? publicProjection : p))
+            : [publicProjection, ...prev];
+        }
+        return prev.filter((p) => p.id !== sellerId);
+      });
       setProducts((prev) =>
         prev.map((p) => (p.sellerId === sellerId ? { ...p, sellerVerified: isApproved } : p))
       );
@@ -3343,15 +3452,15 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       await addAuditLog(
         `تحديث حالة التاجر «${target.nameAr}» إلى (${
           status === 'approved'
-            ? 'معتمد وموثق وتفعيل حساب التاجر'
+            ? 'معتمد وموثق وتفعيل حساب التاجر ومزامنة الملف العام'
             : status === 'suspended'
-            ? 'موقوف مؤقتاً'
+            ? 'موقوف مؤقتاً وإخفاؤه من المتجر العام'
             : status === 'rejected'
-            ? 'مرفوض'
+            ? 'مرفوض وإخفاؤه من المتجر العام'
             : 'قيد المراجعة'
         })`,
-        `Updated seller "${target.nameEn}" status to ${status}${
-          isApproved && applicantUid ? ` and activated seller account (${applicantUid})` : ''
+        `Updated seller "${target.nameEn}" status to ${status} and synced public profile${
+          isApproved && applicantUid ? ` (linked user ${applicantUid})` : ''
         }`,
         'seller',
         sellerId
@@ -3360,13 +3469,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         lang === 'ar' ? `تم تحديث حالة متجر ${target.nameAr}` : `Updated ${target.nameEn} status`,
         isApproved && applicantUid
           ? lang === 'ar'
-            ? 'تمت ترقية حساب مقدم الطلب إلى تاجر معتمد وربطه بالمتجر'
-            : 'Applicant account activated with Seller privileges'
+            ? 'تمت ترقية حساب مقدم الطلب إلى تاجر معتمد ومزامنة الملف العام للمتجر'
+            : 'Applicant account activated and public storefront profile synchronized'
           : undefined,
         'success'
       );
     },
-    [currentUser, isDemoMode, sellers, users, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, privateSellers, sellers, users, addAuditLog, lang, showToast]
   );
 
   const requestSellerApplicationInfo = useCallback(
@@ -3454,7 +3563,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const updateSellerCommissionRate = useCallback(
     async (sellerId: string, commissionRate: number) => {
       if (!currentUser || currentUser.role !== 'admin') return;
-      const target = sellers.find((s) => s.id === sellerId);
+      const target =
+        privateSellers.find((s) => s.id === sellerId) || sellers.find((s) => s.id === sellerId);
       if (!target) return;
       const clampedRate = Math.min(35, Math.max(0, Number(commissionRate.toFixed(1))));
       const nextPlatformCommission = Math.round((target.grossSales * clampedRate) / 100);
@@ -3470,7 +3580,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       };
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'sellers', sellerId), updated);
+          const cleanSeller = Object.fromEntries(
+            Object.entries(updated).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'sellers', sellerId), cleanSeller);
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
           showToast(
@@ -3481,7 +3594,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           return;
         }
       }
-      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      setPrivateSellers((prev) => {
+        const base = prev.length > 0 ? prev : INITIAL_SELLERS;
+        return base.map((s) => (s.id === sellerId ? updated : s));
+      });
       await addAuditLog(
         `تعديل نسبة عمولة المنصة لمتجر «${target.nameAr}» من ${target.commissionRate}% إلى ${clampedRate}%`,
         `Adjusted platform commission rate for "${target.nameEn}" from ${target.commissionRate}% to ${clampedRate}%`,
@@ -3496,21 +3612,32 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, sellers, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, privateSellers, sellers, addAuditLog, lang, showToast]
   );
 
   const toggleSellerVerification = useCallback(
     async (sellerId: string, verifiedBadge: boolean) => {
       if (!currentUser || currentUser.role !== 'admin') return;
-      const target = sellers.find((s) => s.id === sellerId);
+      const target =
+        privateSellers.find((s) => s.id === sellerId) || sellers.find((s) => s.id === sellerId);
       if (!target) return;
       const updated: Seller = {
         ...target,
         verifiedBadge,
       };
+      const publicProjection: PublicSellerProfile = toPublicSellerProfile(updated);
+
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'sellers', sellerId), updated);
+          const batch = writeBatch(db);
+          const cleanSeller = Object.fromEntries(
+            Object.entries(updated).filter(([, v]) => v !== undefined)
+          );
+          batch.set(doc(db, 'sellers', sellerId), cleanSeller);
+          if (updated.status === 'approved') {
+            batch.set(doc(db, 'sellerPublicProfiles', sellerId), publicProjection);
+          }
+          await batch.commit();
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
           showToast(
@@ -3521,7 +3648,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           return;
         }
       }
-      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      setPrivateSellers((prev) => {
+        const base = prev.length > 0 ? prev : INITIAL_SELLERS;
+        return base.map((s) => (s.id === sellerId ? updated : s));
+      });
+      if (updated.status === 'approved') {
+        setPublicSellers((prev) =>
+          prev.some((p) => p.id === sellerId)
+            ? prev.map((p) => (p.id === sellerId ? publicProjection : p))
+            : [publicProjection, ...prev]
+        );
+      }
       setProducts((prev) =>
         prev.map((p) => (p.sellerId === sellerId ? { ...p, sellerVerified: verifiedBadge } : p))
       );
@@ -3541,7 +3678,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, sellers, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, privateSellers, sellers, addAuditLog, lang, showToast]
   );
 
   const moderateProduct = useCallback(
@@ -3988,136 +4125,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const settleSellerPayoutTicket = useCallback(
     async (ticketId: string, adminReferenceNote?: string) => {
-      if (!currentUser || currentUser.role !== 'admin') return;
-      const targetTicket = tickets.find((tkt) => tkt.id === ticketId);
-      if (!targetTicket) return;
-
-      if (targetTicket.status === 'resolved') {
-        showToast(
-          lang === 'ar'
-            ? 'تمت تسوية وإغلاق طلب التحويل هذا مسبقاً'
-            : 'This payout request ticket has already been settled',
-          undefined,
-          'error'
-        );
-        return;
-      }
-
-      // Resolve target seller from ticket.sellerId or matching user/store name
-      const targetSeller =
-        sellers.find((s) => s.id === targetTicket.sellerId) ||
-        sellers.find(
-          (s) =>
-            s.applicantUserId === targetTicket.userId ||
-            targetTicket.subject.includes(s.nameAr) ||
-            targetTicket.userName.includes(s.nameAr)
-        );
-
-      if (!targetSeller) {
-        showToast(
-          lang === 'ar' ? 'تعذر العثور على المتجر المرتبط بطلب التحويل' : 'Could not locate seller for payout ticket',
-          undefined,
-          'error'
-        );
-        return;
-      }
-
-      // Resolve payout amount from ticket.payoutAmount or parse from message/subject
-      let amount = targetTicket.payoutAmount || 0;
-      if (!amount) {
-        const match = (targetTicket.subject + ' ' + targetTicket.message).match(/(\d[\d,]*)/);
-        if (match) {
-          amount = Number(match[1].replace(/,/g, ''));
-        }
-      }
-
-      if (!amount || amount <= 0 || amount > targetSeller.availableBalance) {
-        showToast(
-          lang === 'ar'
-            ? 'مبلغ التسوية غير صالح أو يتجاوز الرصيد المتاح للمتجر'
-            : 'Invalid payout amount or exceeds seller available balance',
-          undefined,
-          'error'
-        );
-        return;
-      }
-
-      const nowDate = new Date().toISOString().split('T')[0];
-      const sarieRef = `SARIE-${Math.floor(100000 + Math.random() * 900000)}`;
-      const maskedSellerIban = maskIban(targetSeller.iban);
-
-      const newPayoutRecord = {
-        id: `pay-${Date.now()}`,
-        amount,
-        status: 'completed' as const,
-        bankNameAr: 'تحويل خزينة أثيل عبر نظام سار (SARIE)',
-        bankNameEn: 'Atheel Treasury SARIE Settlement',
-        ibanLast4: targetSeller.iban.slice(-4),
-        date: nowDate,
-      };
-
-      const updatedSeller: Seller = {
-        ...targetSeller,
-        availableBalance: Number((targetSeller.availableBalance - amount).toFixed(2)),
-        payoutHistory: [newPayoutRecord, ...targetSeller.payoutHistory],
-      };
-
-      const finalReply =
-        adminReferenceNote?.trim() ||
-        (lang === 'ar'
-          ? `تم اعتماد وتحويل مبلغ ${formatPrice(amount)} عبر نظام سار (مرجع: ${sarieRef}) إلى الحساب البنكي المعتمد (${maskedSellerIban}).`
-          : `Approved and settled ${formatPrice(amount)} via SARIE (Ref: ${sarieRef}) to verified account (${maskedSellerIban}).`);
-
-      const updatedTicket: SupportTicket = {
-        ...targetTicket,
-        status: 'resolved',
-        replyAr: finalReply,
-        replyEn: finalReply,
-        repliedAt: nowDate,
-      };
-
-      if (!isDemoMode) {
-        try {
-          const batch = writeBatch(db);
-          const cleanSeller = Object.fromEntries(
-            Object.entries(updatedSeller).filter(([, v]) => v !== undefined)
-          );
-          const cleanTicket = Object.fromEntries(
-            Object.entries(updatedTicket).filter(([, v]) => v !== undefined)
-          );
-          batch.set(doc(db, 'sellers', targetSeller.id), cleanSeller);
-          batch.set(doc(db, 'tickets', ticketId), cleanTicket);
-          await batch.commit();
-        } catch (e) {
-          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
-          showToast(
-            lang === 'ar' ? 'تعذر تنفيذ تسوية التحويل البنكي' : 'Failed to settle seller payout',
-            undefined,
-            'error'
-          );
-          return;
-        }
-      }
-
-      setSellers((prev) => prev.map((s) => (s.id === targetSeller.id ? updatedSeller : s)));
-      setTickets((prev) => prev.map((tkt) => (tkt.id === ticketId ? updatedTicket : tkt)));
-
-      await addAuditLog(
-        `اعتماد وتسوية تحويل أرباح متجر «${targetSeller.nameAr}» بمبلغ ${formatPrice(amount)} عبر نظام سار (${sarieRef})`,
-        `Settled SARIE payout of ${formatPrice(amount)} for "${targetSeller.nameEn}" (${sarieRef})`,
-        'seller',
-        targetSeller.id
-      );
-
-      showToast(
-        lang === 'ar'
-          ? `تم اعتماد وتحويل ${formatPrice(amount)} لمتجر ${targetSeller.nameAr}`
-          : `Settled ${formatPrice(amount)} Payout for ${targetSeller.nameEn}`,
-        `${sarieRef} · ${maskedSellerIban}`,
-        'success'
-      );
+      // Treasury safety invariant:
+      // Never fabricate a fake production bank transfer (SARIE) or deduct seller.availableBalance
+      // as if an external bank wire occurred inside the web client.
+      // Delegate strictly to structured `treasuryStatus` workflow update.
+      await updatePayoutTreasuryStatus(ticketId, 'approved_for_treasury', adminReferenceNote);
     },
-    [currentUser, isDemoMode, tickets, sellers, formatPrice, addAuditLog, lang, showToast]
+    [updatePayoutTreasuryStatus]
   );
 
   const moderateReviewStatus = useCallback(
@@ -4331,6 +4345,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     categories,
     brands,
     products,
+    publicSellers,
+    privateSellers,
     sellers,
     coupons,
     orders,

@@ -2,6 +2,8 @@ import {
   Category,
   Brand,
   Seller,
+  PublicSellerProfile,
+  toPublicSellerProfile,
   Coupon,
   UserProfile,
   Order,
@@ -568,6 +570,10 @@ export const INITIAL_SELLERS: Seller[] = [
     payoutHistory: [],
   },
 ];
+
+export const INITIAL_PUBLIC_SELLERS: PublicSellerProfile[] = INITIAL_SELLERS.filter(
+  (s) => s.status === 'approved'
+).map(toPublicSellerProfile);
 
 export const INITIAL_COUPONS: Coupon[] = [
   {

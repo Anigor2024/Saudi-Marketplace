@@ -158,6 +158,74 @@ export interface Seller {
   operationalSettings?: SellerOperationalSettings;
 }
 
+export interface PublicSellerProfile {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  descriptionAr: string;
+  descriptionEn: string;
+  cityAr: string;
+  cityEn: string;
+  status: SellerStatus;
+  verifiedBadge: boolean;
+  rating: number;
+  reviewCount: number;
+  categories: string[];
+  joinedAt: string;
+}
+
+export function toPublicSellerProfile(
+  seller: Seller | PublicSellerProfile
+): PublicSellerProfile {
+  return {
+    id: seller.id,
+    nameAr: seller.nameAr,
+    nameEn: seller.nameEn,
+    descriptionAr: seller.descriptionAr,
+    descriptionEn: seller.descriptionEn,
+    cityAr: seller.cityAr,
+    cityEn: seller.cityEn,
+    status: seller.status,
+    verifiedBadge: Boolean(seller.verifiedBadge),
+    rating: Number(seller.rating || 0),
+    reviewCount: Number(seller.reviewCount || 0),
+    categories: Array.isArray(seller.categories) ? [...seller.categories] : [],
+    joinedAt: seller.joinedAt || '',
+  };
+}
+
+export function publicProfileToStorefrontSeller(profile: PublicSellerProfile): Seller {
+  return {
+    id: profile.id,
+    nameAr: profile.nameAr,
+    nameEn: profile.nameEn,
+    descriptionAr: profile.descriptionAr,
+    descriptionEn: profile.descriptionEn,
+    cityAr: profile.cityAr,
+    cityEn: profile.cityEn,
+    crNumber: '',
+    vatNumber: '',
+    iban: '',
+    ownerName: '',
+    email: '',
+    phone: '',
+    status: profile.status,
+    verifiedBadge: profile.verifiedBadge,
+    rating: profile.rating,
+    reviewCount: profile.reviewCount,
+    commissionRate: 0,
+    grossSales: 0,
+    platformCommission: 0,
+    refundsTotal: 0,
+    netEarnings: 0,
+    availableBalance: 0,
+    nextPayoutDate: '',
+    joinedAt: profile.joinedAt,
+    categories: Array.isArray(profile.categories) ? [...profile.categories] : [],
+    payoutHistory: [],
+  };
+}
+
 export interface SaudiAddress {
   id: string;
   labelAr: string; // المنزل، العمل، الاستراحة

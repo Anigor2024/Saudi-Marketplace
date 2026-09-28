@@ -44,7 +44,7 @@
     },
     "Seller": {
       "title": "Seller",
-      "description": "Multi-vendor merchant profile, business verification, commission rate, and financial metrics",
+      "description": "Private multi-vendor merchant profile, business verification, commission rate, and financial metrics",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
@@ -57,18 +57,48 @@
         "cityEn": { "type": "string" },
         "crNumber": { "type": "string" },
         "vatNumber": { "type": "string" },
+        "iban": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
         "status": { "type": "string", "enum": ["approved", "pending", "suspended", "rejected"] },
         "verifiedBadge": { "type": "boolean" },
         "rating": { "type": "number" },
         "reviewCount": { "type": "number" },
         "commissionRate": { "type": "number" },
         "grossSales": { "type": "number" },
+        "platformCommission": { "type": "number" },
+        "refundsTotal": { "type": "number" },
         "netEarnings": { "type": "number" },
         "availableBalance": { "type": "number" },
+        "nextPayoutDate": { "type": "string" },
         "joinedAt": { "type": "string" },
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "payoutHistory": { "type": "array", "items": { "type": "object" } },
         "operationalSettings": { "type": "object" }
       },
       "required": ["id", "nameAr", "nameEn", "status", "commissionRate"]
+    },
+    "PublicSellerProfile": {
+      "title": "PublicSellerProfile",
+      "description": "Public storefront seller profile containing only marketplace-safe presentation fields",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nameAr": { "type": "string" },
+        "nameEn": { "type": "string" },
+        "descriptionAr": { "type": "string" },
+        "descriptionEn": { "type": "string" },
+        "cityAr": { "type": "string" },
+        "cityEn": { "type": "string" },
+        "status": { "type": "string", "enum": ["approved", "pending", "suspended", "rejected"] },
+        "verifiedBadge": { "type": "boolean" },
+        "rating": { "type": "number" },
+        "reviewCount": { "type": "number" },
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "joinedAt": { "type": "string" }
+      },
+      "required": ["id", "nameAr", "nameEn", "status", "verifiedBadge", "rating", "reviewCount", "categories", "joinedAt"]
     },
     "Order": {
       "title": "Order",
@@ -226,7 +256,11 @@
     },
     "/sellers/{sellerId}": {
       "schema": { "$ref": "#/entities/Seller" },
-      "description": "All marketplace sellers and vendor applications"
+      "description": "Private marketplace sellers and vendor applications (restricted to Admin, linked seller, and applicant)"
+    },
+    "/sellerPublicProfiles/{sellerId}": {
+      "schema": { "$ref": "#/entities/PublicSellerProfile" },
+      "description": "Public storefront seller profiles containing only marketplace-safe fields"
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/Order" },
