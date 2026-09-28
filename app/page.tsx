@@ -38,6 +38,7 @@ import { ProductCard } from '../components/ProductCard';
 import { AuthViews } from '../components/AuthViews';
 import { CheckoutView, OrderConfirmationView } from '../components/CheckoutAndConfirmationViews';
 import SellerCenter from '../components/SellerCenter';
+import { AdminConsole } from '../components/AdminConsole';
 
 function MarketplaceShell() {
   const {
@@ -1554,7 +1555,10 @@ function MarketplaceShell() {
             {/* 8B. PROFESSIONAL MULTI-VENDOR SELLER CENTER (ROUND 2) */}
             {activeView === 'seller-dashboard' && canAccessSellerDashboard && <SellerCenter />}
 
-            {/* 9. OTHER PORTAL VIEWS (Wishlist, Compare, Unauthorized Seller/Admin Access, Admin Dashboard, Static Info) */}
+            {/* 8C. EXECUTIVE ADMIN CONSOLE: CORE MARKETPLACE OPERATIONS (ROUND 3A) */}
+            {activeView === 'admin-dashboard' && canAccessAdminDashboard && <AdminConsole />}
+
+            {/* 9. OTHER PORTAL VIEWS (Wishlist, Compare, Unauthorized Seller/Admin Access, Static Info) */}
             {activeView !== 'home' &&
               activeView !== 'login' &&
               activeView !== 'register' &&
@@ -1566,7 +1570,8 @@ function MarketplaceShell() {
               activeView !== 'cart' &&
               activeView !== 'account' &&
               activeView !== 'orders' &&
-              !(activeView === 'seller-dashboard' && canAccessSellerDashboard) && (
+              !(activeView === 'seller-dashboard' && canAccessSellerDashboard) &&
+              !(activeView === 'admin-dashboard' && canAccessAdminDashboard) && (
                 <div className="max-w-[1440px] mx-auto px-4 lg:px-8 py-12">
                   <div className="bg-white rounded-2xl border border-[#E6E0D6] p-8 space-y-6">
                     <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E6E0D6] pb-4">

@@ -288,6 +288,8 @@ interface MarketplaceContextType {
 
   // Admin Actions
   updateSellerStatus: (sellerId: string, status: SellerStatus) => Promise<void>;
+  updateSellerCommissionRate: (sellerId: string, commissionRate: number) => Promise<void>;
+  toggleSellerVerification: (sellerId: string, verifiedBadge: boolean) => Promise<void>;
   moderateProduct: (
     productId: string,
     updates: Partial<Product>,
@@ -295,8 +297,30 @@ interface MarketplaceContextType {
     logReasonEn: string
   ) => Promise<void>;
   processReturnRequest: (orderId: string, approve: boolean, adminNote: string) => Promise<void>;
+  adjustCustomerWalletAndLoyalty: (
+    userId: string,
+    walletDelta: number,
+    pointsDelta: number,
+    loyaltyTier: UserProfile['loyaltyTier'],
+    reasonAr: string,
+    reasonEn: string
+  ) => Promise<void>;
+  replyToSupportTicket: (
+    ticketId: string,
+    replyText: string,
+    status: SupportTicket['status']
+  ) => Promise<void>;
+  moderateReviewStatus: (reviewId: string, status: Review['status']) => Promise<void>;
+  deleteReviewAdmin: (reviewId: string) => Promise<void>;
+  deleteQuestionAdmin: (questionId: string) => Promise<void>;
   updateHomepageConfig: (config: HomepageConfig) => Promise<void>;
   answerProductQuestion: (questionId: string, answerText: string) => Promise<void>;
+  addAuditLog: (
+    actionAr: string,
+    actionEn: string,
+    targetType: AuditLogEntry['targetType'],
+    targetId: string
+  ) => Promise<void>;
 
   // Toasts
   toasts: ToastMessage[];
@@ -746,14 +770,20 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
     let unsubOrders: (() => void) | undefined;
     let unsubLogs: (() => void) | undefined;
+    let unsubAllProducts: (() => void) | undefined;
+    let unsubAllCoupons: (() => void) | undefined;
+    let unsubAllTickets: (() => void) | undefined;
+    let unsubAllUsers: (() => void) | undefined;
 
     if (currentUser.role === 'admin') {
       unsubOrders = onSnapshot(
         collection(db, 'orders'),
         (snap) => {
-          const list = snap.docs.map((d) => d.data() as Order);
-          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-          setOrders(list);
+          if (!snap.empty) {
+            const list = snap.docs.map((d) => d.data() as Order);
+            list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            setOrders(list);
+          }
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
       );
@@ -761,11 +791,59 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubLogs = onSnapshot(
         collection(db, 'auditLogs'),
         (snap) => {
-          const list = snap.docs.map((d) => d.data() as AuditLogEntry);
-          list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-          setAuditLogs(list);
+          if (!snap.empty) {
+            const list = snap.docs.map((d) => d.data() as AuditLogEntry);
+            list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+            setAuditLogs(list);
+          }
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'auditLogs')
+      );
+
+      unsubAllProducts = onSnapshot(
+        collection(db, 'products'),
+        (snap) => {
+          if (!snap.empty) {
+            const list = snap.docs.map((d) => d.data() as Product);
+            list.sort((a, b) => {
+              const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
+              const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
+              return numA - numB;
+            });
+            setProducts(list);
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'products')
+      );
+
+      unsubAllCoupons = onSnapshot(
+        collection(db, 'coupons'),
+        (snap) => {
+          if (!snap.empty) {
+            setCoupons(snap.docs.map((d) => d.data() as Coupon));
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'coupons')
+      );
+
+      unsubAllTickets = onSnapshot(
+        collection(db, 'tickets'),
+        (snap) => {
+          if (!snap.empty) {
+            setTickets(snap.docs.map((d) => d.data() as SupportTicket));
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'tickets')
+      );
+
+      unsubAllUsers = onSnapshot(
+        collection(db, 'users'),
+        (snap) => {
+          if (!snap.empty) {
+            setUsers(snap.docs.map((d) => d.data() as UserProfile));
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'users')
       );
     } else if (currentUser.role === 'seller' && currentUser.sellerId) {
       unsubOrders = onSnapshot(
@@ -792,6 +870,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     return () => {
       unsubOrders?.();
       unsubLogs?.();
+      unsubAllProducts?.();
+      unsubAllCoupons?.();
+      unsubAllTickets?.();
+      unsubAllUsers?.();
     };
   }, [currentUser, isDemoMode]);
 
@@ -3101,7 +3183,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
       await addAuditLog(
         `تحديث حالة التاجر «${target.nameAr}» إلى (${
-          status === 'approved' ? 'معتمد وموثق' : status === 'suspended' ? 'موقوف مؤقتاً' : 'مرفوض'
+          status === 'approved' ? 'معتمد وموثق' : status === 'suspended' ? 'موقوف مؤقتاً' : status === 'rejected' ? 'مرفوض' : 'قيد المراجعة'
         })`,
         `Updated seller "${target.nameEn}" status to ${status}`,
         'seller',
@@ -3109,6 +3191,99 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       );
       showToast(
         lang === 'ar' ? `تم تحديث حالة متجر ${target.nameAr}` : `Updated ${target.nameEn} status`,
+        undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, sellers, addAuditLog, lang, showToast]
+  );
+
+  const updateSellerCommissionRate = useCallback(
+    async (sellerId: string, commissionRate: number) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const target = sellers.find((s) => s.id === sellerId);
+      if (!target) return;
+      const clampedRate = Math.min(35, Math.max(0, Number(commissionRate.toFixed(1))));
+      const nextPlatformCommission = Math.round((target.grossSales * clampedRate) / 100);
+      const nextNetEarnings = Math.max(
+        0,
+        target.grossSales - nextPlatformCommission - target.refundsTotal
+      );
+      const updated: Seller = {
+        ...target,
+        commissionRate: clampedRate,
+        platformCommission: nextPlatformCommission,
+        netEarnings: nextNetEarnings,
+      };
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'sellers', sellerId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث نسبة العمولة' : 'Failed to update commission rate',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      await addAuditLog(
+        `تعديل نسبة عمولة المنصة لمتجر «${target.nameAr}» من ${target.commissionRate}% إلى ${clampedRate}%`,
+        `Adjusted platform commission rate for "${target.nameEn}" from ${target.commissionRate}% to ${clampedRate}%`,
+        'seller',
+        sellerId
+      );
+      showToast(
+        lang === 'ar'
+          ? `تم تحديث عمولة متجر ${target.nameAr} إلى ${clampedRate}%`
+          : `Updated ${target.nameEn} commission to ${clampedRate}%`,
+        undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, sellers, addAuditLog, lang, showToast]
+  );
+
+  const toggleSellerVerification = useCallback(
+    async (sellerId: string, verifiedBadge: boolean) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const target = sellers.find((s) => s.id === sellerId);
+      if (!target) return;
+      const updated: Seller = {
+        ...target,
+        verifiedBadge,
+      };
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'sellers', sellerId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث شارة التوثيق' : 'Failed to update verification badge',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      setProducts((prev) =>
+        prev.map((p) => (p.sellerId === sellerId ? { ...p, sellerVerified: verifiedBadge } : p))
+      );
+      await addAuditLog(
+        `${verifiedBadge ? 'منح' : 'إلغاء'} شارة المتجر الموثوق لمتجر «${target.nameAr}»`,
+        `${verifiedBadge ? 'Granted' : 'Revoked'} Verified Boutique badge for "${target.nameEn}"`,
+        'seller',
+        sellerId
+      );
+      showToast(
+        lang === 'ar'
+          ? verifiedBadge
+            ? `تم منح شارة التوثيق لمتجر ${target.nameAr}`
+            : `تم إلغاء شارة التوثيق لمتجر ${target.nameAr}`
+          : `${target.nameEn} verification badge updated`,
         undefined,
         'success'
       );
@@ -3129,7 +3304,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const updated: Product = { ...target, ...updates };
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'products', productId), updated);
+          const cleanPayload = Object.fromEntries(
+            Object.entries(updated).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'products', productId), cleanPayload);
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'products');
           showToast(lang === 'ar' ? 'تعذر تحديث المنتج' : 'Failed to moderate product', undefined, 'error');
@@ -3162,7 +3340,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       };
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'orders', orderId), updated);
+          const cleanOrder = Object.fromEntries(
+            Object.entries(updated).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'orders', orderId), cleanOrder);
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'orders');
           showToast(lang === 'ar' ? 'تعذر معالجة طلب الإرجاع' : 'Failed to process return request', undefined, 'error');
@@ -3170,6 +3351,26 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
       setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+
+      // If approved and refundMethod is wallet, credit customer wallet balance
+      if (approve && target.returnRequest?.refundMethod === 'wallet') {
+        const customerProfile = users.find((u) => u.id === target.customerId);
+        if (customerProfile) {
+          const updatedCustomer: UserProfile = {
+            ...customerProfile,
+            walletBalance: Number((customerProfile.walletBalance + target.total).toFixed(2)),
+          };
+          if (!isDemoMode) {
+            try {
+              await setDoc(doc(db, 'users', updatedCustomer.id), updatedCustomer);
+            } catch (e) {
+              logFirestoreFailure(e, OperationType.UPDATE, 'users');
+            }
+          }
+          setUsers((prev) => prev.map((u) => (u.id === updatedCustomer.id ? updatedCustomer : u)));
+        }
+      }
+
       await addAuditLog(
         `${approve ? 'الموافقة على إرجاع واسترداد مبلغ' : 'رفض طلب إرجاع'} الطلب #${target.orderNumber}`,
         `${approve ? 'Approved return & refund for' : 'Declined return for'} Order #${target.orderNumber}`,
@@ -3186,7 +3387,250 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, orders, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, orders, users, addAuditLog, lang, showToast]
+  );
+
+  const adjustCustomerWalletAndLoyalty = useCallback(
+    async (
+      userId: string,
+      walletDelta: number,
+      pointsDelta: number,
+      loyaltyTier: UserProfile['loyaltyTier'],
+      reasonAr: string,
+      reasonEn: string
+    ) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const targetUser = users.find((u) => u.id === userId);
+      if (!targetUser) return;
+
+      const nextWallet = Math.max(0, Number((targetUser.walletBalance + walletDelta).toFixed(2)));
+      const nextPoints = Math.max(0, Math.round(targetUser.loyaltyPoints + pointsDelta));
+      const nowDate = new Date().toISOString().split('T')[0];
+
+      const nextHistory =
+        pointsDelta !== 0
+          ? [
+              {
+                id: `lh-adm-${Date.now()}`,
+                titleAr: reasonAr || 'تعديل نقاط الولاء من الإدارة التنفيذية',
+                titleEn: reasonEn || 'Executive Admin Loyalty Adjustment',
+                points: pointsDelta,
+                date: nowDate,
+              },
+              ...targetUser.loyaltyHistory,
+            ]
+          : targetUser.loyaltyHistory;
+
+      // Preserve role and sellerId strictly (never mutate RBAC fields from browser)
+      const updatedUser: UserProfile = {
+        ...targetUser,
+        walletBalance: nextWallet,
+        loyaltyPoints: nextPoints,
+        loyaltyTier,
+        loyaltyHistory: nextHistory,
+        role: targetUser.role,
+        sellerId: targetUser.sellerId,
+      };
+
+      if (!isDemoMode) {
+        try {
+          const cleanUser = Object.fromEntries(
+            Object.entries(updatedUser).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'users', userId), cleanUser);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'users');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث محفظة أو ولاء العميل' : 'Failed to update customer wallet/loyalty',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setUsers((prev) => prev.map((u) => (u.id === userId ? updatedUser : u)));
+      if (currentUser.id === userId) {
+        setCurrentUser(updatedUser);
+      }
+
+      await addAuditLog(
+        `تحديث حساب العميل «${targetUser.name}»: ${reasonAr}`,
+        `Updated customer "${targetUser.name}": ${reasonEn}`,
+        'customer',
+        userId
+      );
+
+      showToast(
+        lang === 'ar'
+          ? `تم تحديث محفظة وبرنامج ولاء ${targetUser.name}`
+          : `Updated wallet & loyalty for ${targetUser.name}`,
+        reasonAr,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, users, addAuditLog, lang, showToast]
+  );
+
+  const replyToSupportTicket = useCallback(
+    async (ticketId: string, replyText: string, status: SupportTicket['status']) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const target = tickets.find((tkt) => tkt.id === ticketId);
+      if (!target) return;
+
+      const nowDate = new Date().toISOString().split('T')[0];
+      const updated: SupportTicket = {
+        ...target,
+        status,
+        ...(replyText.trim()
+          ? {
+              replyAr: replyText.trim(),
+              replyEn: replyText.trim(),
+              repliedAt: nowDate,
+            }
+          : {}),
+      };
+
+      if (!isDemoMode) {
+        try {
+          const cleanTicket = Object.fromEntries(
+            Object.entries(updated).filter(([, v]) => v !== undefined)
+          );
+          await setDoc(doc(db, 'tickets', ticketId), cleanTicket);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'tickets');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث تذكرة الدعم' : 'Failed to update support ticket',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setTickets((prev) => prev.map((tkt) => (tkt.id === ticketId ? updated : tkt)));
+      await addAuditLog(
+        `معالجة تذكرة الدعم #${target.ticketNumber} وتحديث حالتها إلى (${
+          status === 'resolved' ? 'محلولة' : status === 'in_progress' ? 'قيد المعالجة' : 'مفتوحة'
+        })`,
+        `Updated Support Ticket #${target.ticketNumber} status to ${status}`,
+        'ticket',
+        ticketId
+      );
+      showToast(
+        lang === 'ar'
+          ? `تم تحديث تذكرة الدعم #${target.ticketNumber}`
+          : `Support Ticket #${target.ticketNumber} Updated`,
+        undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, tickets, addAuditLog, lang, showToast]
+  );
+
+  const moderateReviewStatus = useCallback(
+    async (reviewId: string, status: Review['status']) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const target = reviews.find((r) => r.id === reviewId);
+      if (!target) return;
+      const updated: Review = { ...target, status };
+      if (!isDemoMode) {
+        try {
+          await updateDoc(doc(db, 'reviews', reviewId), { status });
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'reviews');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث حالة التقييم' : 'Failed to update review status',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+      setReviews((prev) => prev.map((r) => (r.id === reviewId ? updated : r)));
+      await addAuditLog(
+        `تحديث حالة تقييم العميل «${target.userName}» إلى (${
+          status === 'approved' ? 'معتمد' : status === 'hidden' ? 'مخفي' : 'قيد المراجعة'
+        })`,
+        `Updated review ${reviewId} status to ${status}`,
+        'review',
+        reviewId
+      );
+      showToast(
+        lang === 'ar' ? 'تم تحديث حالة التقييم بنجاح' : 'Review Status Updated',
+        undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, reviews, addAuditLog, lang, showToast]
+  );
+
+  const deleteReviewAdmin = useCallback(
+    async (reviewId: string) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const target = reviews.find((r) => r.id === reviewId);
+      if (!target) return;
+      if (!isDemoMode) {
+        try {
+          await deleteDoc(doc(db, 'reviews', reviewId));
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.DELETE, 'reviews');
+          showToast(
+            lang === 'ar' ? 'تعذر حذف التقييم' : 'Failed to delete review',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+      setReviews((prev) => prev.filter((r) => r.id !== reviewId));
+      await addAuditLog(
+        `حذف تقييم العميل «${target.userName}» من المنتج (${target.productId})`,
+        `Deleted review ${reviewId} by "${target.userName}"`,
+        'review',
+        reviewId
+      );
+      showToast(
+        lang === 'ar' ? 'تم حذف التقييم نهائياً' : 'Review Deleted',
+        undefined,
+        'info'
+      );
+    },
+    [currentUser, isDemoMode, reviews, addAuditLog, lang, showToast]
+  );
+
+  const deleteQuestionAdmin = useCallback(
+    async (questionId: string) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
+      const target = questions.find((q) => q.id === questionId);
+      if (!target) return;
+      if (!isDemoMode) {
+        try {
+          await deleteDoc(doc(db, 'questions', questionId));
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.DELETE, 'questions');
+          showToast(
+            lang === 'ar' ? 'تعذر حذف السؤال' : 'Failed to delete question',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+      setQuestions((prev) => prev.filter((q) => q.id !== questionId));
+      await addAuditLog(
+        `حذف استفسار العميل «${target.userName}» على المنتج (${target.productId})`,
+        `Deleted product question ${questionId}`,
+        'question',
+        questionId
+      );
+      showToast(
+        lang === 'ar' ? 'تم حذف السؤال من صفحة المنتج' : 'Question Deleted',
+        undefined,
+        'info'
+      );
+    },
+    [currentUser, isDemoMode, questions, addAuditLog, lang, showToast]
   );
 
   const updateHomepageConfig = useCallback(
@@ -3370,10 +3814,18 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     updateSellerProfile,
     requestSellerPayout,
     updateSellerStatus,
+    updateSellerCommissionRate,
+    toggleSellerVerification,
     moderateProduct,
     processReturnRequest,
+    adjustCustomerWalletAndLoyalty,
+    replyToSupportTicket,
+    moderateReviewStatus,
+    deleteReviewAdmin,
+    deleteQuestionAdmin,
     updateHomepageConfig,
     answerProductQuestion,
+    addAuditLog,
     toasts,
     showToast,
     dismissToast,

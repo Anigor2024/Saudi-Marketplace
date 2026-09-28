@@ -374,6 +374,8 @@ export interface SupportTicket {
   status: 'open' | 'in_progress' | 'resolved';
   createdAt: string;
   replyAr?: string;
+  replyEn?: string;
+  repliedAt?: string;
 }
 
 export interface AuditLogEntry {
@@ -382,7 +384,17 @@ export interface AuditLogEntry {
   actorRole: UserRole;
   actionAr: string;
   actionEn: string;
-  targetType: 'seller' | 'product' | 'order' | 'coupon' | 'homepage' | 'return';
+  targetType:
+    | 'seller'
+    | 'product'
+    | 'order'
+    | 'coupon'
+    | 'homepage'
+    | 'return'
+    | 'customer'
+    | 'ticket'
+    | 'review'
+    | 'question';
   targetId: string;
   createdAt: string;
 }
