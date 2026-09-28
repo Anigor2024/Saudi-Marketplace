@@ -76,6 +76,7 @@
         "customerName": { "type": "string" },
         "customerEmail": { "type": "string" },
         "customerPhone": { "type": "string" },
+        "productIds": { "type": "array", "items": { "type": "string" } },
         "subtotal": { "type": "number" },
         "discountAmount": { "type": "number" },
         "shippingFee": { "type": "number" },

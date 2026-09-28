@@ -243,6 +243,7 @@ export interface Order {
   customerEmail: string;
   customerPhone: string;
   sellerIds?: string[];
+  productIds: string[];
   items: OrderItem[];
   address: SaudiAddress;
   deliverySpeed: 'express' | 'standard';

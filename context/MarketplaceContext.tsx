@@ -1523,6 +1523,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const nowIso = new Date().toISOString();
       const orderNum = `ATH-${Math.floor(10000 + Math.random() * 89999)}`;
       const uniqueSellerIds = Array.from(new Set(cart.map((c) => c.product.sellerId)));
+      const uniqueProductIds = Array.from(new Set(cart.map((c) => c.productId)));
 
       const newOrder: Order = {
         id: `ord-${Date.now()}`,
@@ -1532,6 +1533,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         customerEmail: currentUser.email || 'customer@atheel.sa',
         customerPhone: address.phone,
         sellerIds: uniqueSellerIds,
+        productIds: uniqueProductIds,
         items: cart.map((c) => ({
           productId: c.productId,
           sku: c.product.sku,
@@ -1590,12 +1592,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         try {
           await setDoc(doc(db, 'orders', newOrder.id), newOrder);
           await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
-          // Safely increment coupon usedCount on real purchase
-          if (liveCoupon && cartSummary.discountAmount > 0) {
-            await updateDoc(doc(db, 'coupons', liveCoupon.id), {
-              usedCount: liveCoupon.usedCount + 1,
-            });
-          }
+          // SECURITY NOTE: Authoritative coupon `usedCount` redemption is intentionally NOT persisted
+          // directly from an untrusted browser client to prevent coupon exhaustion attacks.
+          // In production, authoritative coupon redemption (`usedCount + 1`) must be processed
+          // atomically by a trusted backend / Cloud Function together with server-validated order creation.
         } catch (err) {
           logFirestoreFailure(err, OperationType.CREATE, 'orders');
           showToast(
@@ -1609,7 +1609,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
-      // Increment coupon usage in local state (for both real orders and isolated Demo Mode)
+      // Increment coupon usage in local state only (for Demo Mode and immediate client UI feedback)
       if (liveCoupon && cartSummary.discountAmount > 0) {
         setCoupons((prev) =>
           prev.map((c) => (c.id === liveCoupon.id ? { ...c, usedCount: c.usedCount + 1 } : c))
@@ -1928,12 +1928,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         ? currentUser.id
         : auth.currentUser?.uid || currentUser.id;
 
-      // Determine whether the customer actually has a DELIVERED order containing this product
+      // Determine whether the customer actually has a DELIVERED order whose immutable `productIds` includes this product
       const deliveredOrder = orders.find(
         (o) =>
           o.customerId === effectiveUserId &&
           o.status === 'delivered' &&
-          o.items.some((item) => item.productId === productId)
+          Array.isArray(o.productIds) &&
+          o.productIds.includes(productId)
       );
       const isVerifiedBuyer = Boolean(deliveredOrder);
 
@@ -2113,9 +2114,143 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         showToast(lang === 'ar' ? 'غير مصرح بهذا الإجراء' : 'Unauthorized action', undefined, 'error');
         return;
       }
+
+      const existingProd = products.find((p) => p.id === product.id);
+
+      // Seller ownership & anti-tampering guard
+      if (currentUser.role === 'seller') {
+        if (!currentUser.sellerId) {
+          showToast(lang === 'ar' ? 'حساب التاجر غير مرتبط بمتجر' : 'Seller account missing sellerId', undefined, 'error');
+          return;
+        }
+        if (existingProd && existingProd.sellerId !== currentUser.sellerId) {
+          showToast(
+            lang === 'ar' ? 'لا يمكنك تعديل منتج تابع لمتجر آخر' : 'Cannot modify another seller product',
+            undefined,
+            'error'
+          );
+          return;
+        }
+        if (existingProd && existingProd.status === 'suspended') {
+          showToast(
+            lang === 'ar' ? 'هذا المنتج موقوف من الإدارة ولا يمكن تعديله مباشرة' : 'Suspended products can only be restored by Admin',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      const sellerDoc = sellers.find((s) => s.id === (currentUser.sellerId || product.sellerId));
+
+      // Construct safe product object: sellers can NEVER alter platform-owned metrics
+      // (sellerId, sellerRating, sellerVerified, rating, reviewCount, soldCount)
+      const sanitizedProduct: Product =
+        currentUser.role === 'admin'
+          ? product
+          : existingProd
+          ? {
+              ...existingProd,
+              sku: product.sku,
+              titleAr: product.titleAr,
+              titleEn: product.titleEn,
+              descriptionAr: product.descriptionAr,
+              descriptionEn: product.descriptionEn,
+              categoryId: product.categoryId,
+              subcategoryAr: product.subcategoryAr,
+              subcategoryEn: product.subcategoryEn,
+              brandId: product.brandId,
+              brandNameAr: product.brandNameAr,
+              brandNameEn: product.brandNameEn,
+              price: product.price,
+              originalPrice: product.originalPrice,
+              discountPercent: product.discountPercent,
+              stock: product.stock,
+              lowStockThreshold: product.lowStockThreshold,
+              status: product.status === 'suspended' ? existingProd.status : product.status,
+              images: product.images,
+              variants: product.variants,
+              specifications: product.specifications,
+              warrantyAr: product.warrantyAr,
+              warrantyEn: product.warrantyEn,
+              deliveryEstimateAr: product.deliveryEstimateAr,
+              deliveryEstimateEn: product.deliveryEstimateEn,
+              isFlashDeal: product.isFlashDeal,
+              flashDealEndsAt: product.flashDealEndsAt,
+              isSeasonal: product.isSeasonal,
+              frequentlyBoughtWith: product.frequentlyBoughtWith,
+              // Platform-owned metrics strictly preserved:
+              sellerId: existingProd.sellerId,
+              sellerNameAr: existingProd.sellerNameAr,
+              sellerNameEn: existingProd.sellerNameEn,
+              sellerRating: existingProd.sellerRating,
+              sellerVerified: existingProd.sellerVerified,
+              rating: existingProd.rating,
+              reviewCount: existingProd.reviewCount,
+              soldCount: existingProd.soldCount,
+              isFeatured: existingProd.isFeatured,
+              isTrending: existingProd.isTrending,
+              isBestSeller: existingProd.isBestSeller,
+              isNewArrival: existingProd.isNewArrival,
+              createdAt: existingProd.createdAt,
+            }
+          : {
+              ...product,
+              sellerId: currentUser.sellerId!,
+              sellerNameAr: sellerDoc?.nameAr || product.sellerNameAr,
+              sellerNameEn: sellerDoc?.nameEn || product.sellerNameEn,
+              sellerRating: sellerDoc?.rating ?? 5.0,
+              sellerVerified: sellerDoc?.verifiedBadge ?? false,
+              rating: 0,
+              reviewCount: 0,
+              soldCount: 0,
+              status: product.status === 'suspended' ? 'draft' : product.status,
+            };
+
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'products', product.id), product);
+          if (currentUser.role === 'admin' || !existingProd) {
+            await setDoc(doc(db, 'products', sanitizedProduct.id), sanitizedProduct);
+          } else {
+            // Seller update: send ONLY allowed catalog keys to match Firestore diff().affectedKeys().hasOnly(...)
+            const allowedSellerUpdate: Record<string, unknown> = {
+              sku: sanitizedProduct.sku,
+              titleAr: sanitizedProduct.titleAr,
+              titleEn: sanitizedProduct.titleEn,
+              descriptionAr: sanitizedProduct.descriptionAr,
+              descriptionEn: sanitizedProduct.descriptionEn,
+              categoryId: sanitizedProduct.categoryId,
+              subcategoryAr: sanitizedProduct.subcategoryAr,
+              subcategoryEn: sanitizedProduct.subcategoryEn,
+              brandId: sanitizedProduct.brandId,
+              brandNameAr: sanitizedProduct.brandNameAr,
+              brandNameEn: sanitizedProduct.brandNameEn,
+              price: sanitizedProduct.price,
+              originalPrice: sanitizedProduct.originalPrice,
+              discountPercent: sanitizedProduct.discountPercent,
+              stock: sanitizedProduct.stock,
+              lowStockThreshold: sanitizedProduct.lowStockThreshold,
+              status: sanitizedProduct.status,
+              images: sanitizedProduct.images,
+              variants: sanitizedProduct.variants,
+              specifications: sanitizedProduct.specifications,
+              warrantyAr: sanitizedProduct.warrantyAr,
+              warrantyEn: sanitizedProduct.warrantyEn,
+              deliveryEstimateAr: sanitizedProduct.deliveryEstimateAr,
+              deliveryEstimateEn: sanitizedProduct.deliveryEstimateEn,
+              isFlashDeal: sanitizedProduct.isFlashDeal,
+            };
+            if (sanitizedProduct.flashDealEndsAt !== undefined) {
+              allowedSellerUpdate.flashDealEndsAt = sanitizedProduct.flashDealEndsAt;
+            }
+            if (sanitizedProduct.isSeasonal !== undefined) {
+              allowedSellerUpdate.isSeasonal = sanitizedProduct.isSeasonal;
+            }
+            if (sanitizedProduct.frequentlyBoughtWith !== undefined) {
+              allowedSellerUpdate.frequentlyBoughtWith = sanitizedProduct.frequentlyBoughtWith;
+            }
+            await updateDoc(doc(db, 'products', sanitizedProduct.id), allowedSellerUpdate);
+          }
         } catch (e) {
           logFirestoreFailure(e, OperationType.WRITE, 'products');
           showToast(lang === 'ar' ? 'تعذر حفظ المنتج' : 'Failed to save product', undefined, 'error');
@@ -2123,22 +2258,24 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
       setProducts((prev) => {
-        const exists = prev.some((p) => p.id === product.id);
-        return exists ? prev.map((p) => (p.id === product.id ? product : p)) : [product, ...prev];
+        const exists = prev.some((p) => p.id === sanitizedProduct.id);
+        return exists
+          ? prev.map((p) => (p.id === sanitizedProduct.id ? sanitizedProduct : p))
+          : [sanitizedProduct, ...prev];
       });
       await addAuditLog(
-        `حفظ وتحديث بيانات المنتج «${product.titleAr}» بسعر ${product.price} ر.س`,
-        `Saved product "${product.titleEn}" at SAR ${product.price}`,
+        `حفظ وتحديث بيانات المنتج «${sanitizedProduct.titleAr}» بسعر ${sanitizedProduct.price} ر.س`,
+        `Saved product "${sanitizedProduct.titleEn}" at SAR ${sanitizedProduct.price}`,
         'product',
-        product.id
+        sanitizedProduct.id
       );
       showToast(
         lang === 'ar' ? 'تم حفظ المنتج بنجاح' : 'Product Saved Successfully',
-        lang === 'ar' ? product.titleAr : product.titleEn,
+        lang === 'ar' ? sanitizedProduct.titleAr : sanitizedProduct.titleEn,
         'success'
       );
     },
-    [currentUser, isDemoMode, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, products, sellers, addAuditLog, lang, showToast]
   );
 
   const deleteProduct = useCallback(
@@ -2174,13 +2311,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const bulkUpdateProductStatus = useCallback(
     async (productIds: string[], status: ProductStatus) => {
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (currentUser.role === 'seller' && status === 'suspended') return;
+      const eligibleIds = productIds.filter((id) => {
+        const prod = products.find((p) => p.id === id);
+        if (!prod) return false;
+        if (currentUser.role === 'seller') {
+          return prod.sellerId === currentUser.sellerId && prod.status !== 'suspended';
+        }
+        return true;
+      });
+      if (eligibleIds.length === 0) return;
+
       if (!isDemoMode) {
         try {
-          for (const id of productIds) {
-            const prod = products.find((p) => p.id === id);
-            if (prod) {
-              await setDoc(doc(db, 'products', id), { ...prod, status });
-            }
+          for (const id of eligibleIds) {
+            await updateDoc(doc(db, 'products', id), { status });
           }
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'products');
@@ -2188,11 +2333,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           return;
         }
       }
-      setProducts((prev) => prev.map((p) => (productIds.includes(p.id) ? { ...p, status } : p)));
+      setProducts((prev) => prev.map((p) => (eligibleIds.includes(p.id) ? { ...p, status } : p)));
       showToast(
         lang === 'ar'
-          ? `تم تحديث حالة ${productIds.length} منتجات`
-          : `Updated ${productIds.length} products`,
+          ? `تم تحديث حالة ${eligibleIds.length} منتجات`
+          : `Updated ${eligibleIds.length} products`,
         undefined,
         'success'
       );
@@ -2205,16 +2350,27 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = products.find((p) => p.id === productId);
       if (!target) return;
+      if (currentUser.role === 'seller' && target.sellerId !== currentUser.sellerId) {
+        showToast(lang === 'ar' ? 'لا يمكنك تعديل مخزون متجر آخر' : 'Cannot modify another seller inventory', undefined, 'error');
+        return;
+      }
+      const nextStock = Math.max(0, newStock);
+      const nextThreshold = lowStockThreshold ?? target.lowStockThreshold;
+      const nextStatus: ProductStatus =
+        nextStock <= 0 ? 'out_of_stock' : target.status === 'out_of_stock' ? 'active' : target.status;
       const updated: Product = {
         ...target,
-        stock: Math.max(0, newStock),
-        lowStockThreshold: lowStockThreshold ?? target.lowStockThreshold,
-        status:
-          newStock <= 0 ? 'out_of_stock' : target.status === 'out_of_stock' ? 'active' : target.status,
+        stock: nextStock,
+        lowStockThreshold: nextThreshold,
+        status: nextStatus,
       };
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'products', productId), updated);
+          await updateDoc(doc(db, 'products', productId), {
+            stock: nextStock,
+            lowStockThreshold: nextThreshold,
+            status: nextStatus,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'products');
           showToast(lang === 'ar' ? 'تعذر تحديث المخزون' : 'Failed to update stock', undefined, 'error');
@@ -2293,9 +2449,67 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const saveCoupon = useCallback(
     async (coupon: Coupon) => {
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      const existingCoupon = coupons.find((c) => c.id === coupon.id);
+
+      if (currentUser.role === 'seller') {
+        if (!currentUser.sellerId) return;
+        if (existingCoupon && existingCoupon.sellerId !== currentUser.sellerId) {
+          showToast(lang === 'ar' ? 'لا يمكنك تعديل كوبون متجر آخر' : 'Cannot modify another seller coupon', undefined, 'error');
+          return;
+        }
+      }
+
+      // Protect `usedCount` and `sellerId` from seller manipulation
+      const sanitizedCoupon: Coupon =
+        currentUser.role === 'admin'
+          ? coupon
+          : existingCoupon
+          ? {
+              ...existingCoupon,
+              code: coupon.code,
+              titleAr: coupon.titleAr,
+              titleEn: coupon.titleEn,
+              type: coupon.type,
+              value: coupon.value,
+              minOrderAmount: coupon.minOrderAmount,
+              maxDiscount: coupon.maxDiscount,
+              maxUses: coupon.maxUses,
+              expiresAt: coupon.expiresAt,
+              isActive: coupon.isActive,
+              // Immutable for sellers:
+              sellerId: existingCoupon.sellerId,
+              usedCount: existingCoupon.usedCount,
+            }
+          : {
+              ...coupon,
+              sellerId: currentUser.sellerId,
+              usedCount: 0,
+            };
+
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'coupons', coupon.id), coupon);
+          if (currentUser.role === 'admin' || !existingCoupon) {
+            await setDoc(doc(db, 'coupons', sanitizedCoupon.id), sanitizedCoupon);
+          } else {
+            const allowedCouponUpdate: Record<string, unknown> = {
+              code: sanitizedCoupon.code,
+              titleAr: sanitizedCoupon.titleAr,
+              titleEn: sanitizedCoupon.titleEn,
+              type: sanitizedCoupon.type,
+              value: sanitizedCoupon.value,
+              minOrderAmount: sanitizedCoupon.minOrderAmount,
+              maxUses: sanitizedCoupon.maxUses,
+              expiresAt: sanitizedCoupon.expiresAt,
+              isActive: sanitizedCoupon.isActive,
+            };
+            if (sanitizedCoupon.maxDiscount !== undefined) {
+              allowedCouponUpdate.maxDiscount = sanitizedCoupon.maxDiscount;
+            }
+            if (sanitizedCoupon.sellerNameAr !== undefined) {
+              allowedCouponUpdate.sellerNameAr = sanitizedCoupon.sellerNameAr;
+            }
+            await updateDoc(doc(db, 'coupons', sanitizedCoupon.id), allowedCouponUpdate);
+          }
         } catch (e) {
           logFirestoreFailure(e, OperationType.WRITE, 'coupons');
           showToast(lang === 'ar' ? 'تعذر حفظ الكوبون' : 'Failed to save coupon', undefined, 'error');
@@ -2303,24 +2517,26 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
       setCoupons((prev) => {
-        const exists = prev.some((c) => c.id === coupon.id);
-        return exists ? prev.map((c) => (c.id === coupon.id ? coupon : c)) : [coupon, ...prev];
+        const exists = prev.some((c) => c.id === sanitizedCoupon.id);
+        return exists
+          ? prev.map((c) => (c.id === sanitizedCoupon.id ? sanitizedCoupon : c))
+          : [sanitizedCoupon, ...prev];
       });
       await addAuditLog(
-        `إنشاء/تحديث كوبون الخصم ${coupon.code} بقيمة ${coupon.value}${
-          coupon.type === 'percentage' ? '%' : ' ر.س'
+        `إنشاء/تحديث كوبون الخصم ${sanitizedCoupon.code} بقيمة ${sanitizedCoupon.value}${
+          sanitizedCoupon.type === 'percentage' ? '%' : ' ر.س'
         }`,
-        `Saved coupon ${coupon.code}`,
+        `Saved coupon ${sanitizedCoupon.code}`,
         'coupon',
-        coupon.id
+        sanitizedCoupon.id
       );
       showToast(
-        lang === 'ar' ? `تم حفظ الكوبون ${coupon.code}` : `Coupon ${coupon.code} Saved`,
+        lang === 'ar' ? `تم حفظ الكوبون ${sanitizedCoupon.code}` : `Coupon ${sanitizedCoupon.code} Saved`,
         undefined,
         'success'
       );
     },
-    [currentUser, isDemoMode, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, coupons, addAuditLog, lang, showToast]
   );
 
   const toggleCouponStatus = useCallback(
@@ -2328,10 +2544,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = coupons.find((c) => c.id === couponId);
       if (!target) return;
+      if (currentUser.role === 'seller' && target.sellerId !== currentUser.sellerId) {
+        showToast(lang === 'ar' ? 'لا يمكنك تعديل كوبون متجر آخر' : 'Cannot modify another seller coupon', undefined, 'error');
+        return;
+      }
       const updated = { ...target, isActive: !target.isActive };
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'coupons', couponId), updated);
+          await updateDoc(doc(db, 'coupons', couponId), { isActive: updated.isActive });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'coupons');
           showToast(lang === 'ar' ? 'تعذر تحديث الكوبون' : 'Failed to update coupon', undefined, 'error');

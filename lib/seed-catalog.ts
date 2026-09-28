@@ -942,6 +942,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
     sellerIds: ['seller-3', 'seller-1'],
+    productIds: ['prod-1', 'prod-5'],
     items: [
       {
         productId: 'prod-1',
@@ -996,6 +997,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
     sellerIds: ['seller-2'],
+    productIds: ['prod-9', 'prod-13'],
     items: [
       {
         productId: 'prod-9',
@@ -1050,6 +1052,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
     sellerIds: ['seller-5'],
+    productIds: ['prod-21'],
     items: [
       {
         productId: 'prod-21',
@@ -1091,6 +1094,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerEmail: 'sara.olayan@example.sa',
     customerPhone: '+966 54 321 7766',
     sellerIds: ['seller-4', 'seller-6'],
+    productIds: ['prod-29', 'prod-33'],
     items: [
       {
         productId: 'prod-29',
@@ -1145,6 +1149,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerEmail: 'fahad.dosari@example.sa',
     customerPhone: '+966 56 889 4411',
     sellerIds: ['seller-2'],
+    productIds: ['prod-17'],
     items: [
       {
         productId: 'prod-17',
@@ -1186,6 +1191,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
     sellerIds: ['seller-4'],
+    productIds: ['prod-25'],
     items: [
       {
         productId: 'prod-25',
@@ -1241,6 +1247,7 @@ export const INITIAL_REVIEWS: Review[] = [
     comment:
       'وصلت الساعة خلال أقل من ٢٤ ساعة في الرياض داخل صندوق خشبي فاخر مع بطاقة الضمان الدولي المختومة. لون الميناء الأخضر الزمردي على الطبيعة أجمل بمراحل من الصور.',
     verifiedPurchase: true,
+    verifiedOrderId: 'ord-98421',
     helpfulCount: 38,
     createdAt: '2026-09-23',
     status: 'approved',
@@ -1257,6 +1264,7 @@ export const INITIAL_REVIEWS: Review[] = [
     comment:
       'من أنقى أنواع الدهن الكمبودي المعتّق التي جربتها. رائحة سويتية بخورية فخمة جداً للمناسبات الرسمية وتثبت على الشماغ والبشت لأكثر من يومين.',
     verifiedPurchase: true,
+    verifiedOrderId: 'ord-98421',
     helpfulCount: 54,
     createdAt: '2026-09-23',
     status: 'approved',
@@ -1305,6 +1313,7 @@ export const INITIAL_REVIEWS: Review[] = [
     comment:
       'القصة انسيابية جداً والخياطة متقنة لأبعد حد. وصلت العباية معطرة ومغلفة في حافظة قماشية فاخرة مع طرحة مطابقة.',
     verifiedPurchase: true,
+    verifiedOrderId: 'ord-98310',
     helpfulCount: 33,
     createdAt: '2026-09-19',
     status: 'approved',
@@ -1321,6 +1330,7 @@ export const INITIAL_REVIEWS: Review[] = [
     comment:
       'النسخة أصلية بفيش ثلاثي سعودي وضمان سنتين. الملحقات الجديدة تختصر الوقت بشكل رائع.',
     verifiedPurchase: true,
+    verifiedOrderId: 'ord-98310',
     helpfulCount: 19,
     createdAt: '2026-09-20',
     status: 'approved',
