@@ -279,6 +279,7 @@ interface MarketplaceContextType {
         | 'categories'
         | 'crNumber'
         | 'vatNumber'
+        | 'operationalSettings'
       >
     >
   ) => Promise<void>;
@@ -2218,13 +2219,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
               rating: 0,
               reviewCount: 0,
               soldCount: 0,
+              isFeatured: false,
+              isTrending: false,
+              isBestSeller: false,
               status: product.status === 'suspended' ? 'draft' : product.status,
             };
 
       if (!isDemoMode) {
         try {
           if (currentUser.role === 'admin' || !existingProd) {
-            await setDoc(doc(db, 'products', sanitizedProduct.id), sanitizedProduct);
+            const cleanCreatePayload = Object.fromEntries(
+              Object.entries(sanitizedProduct).filter(([, v]) => v !== undefined)
+            );
+            await setDoc(doc(db, 'products', sanitizedProduct.id), cleanCreatePayload);
           } else {
             // Seller update: send ONLY allowed catalog keys to match Firestore diff().affectedKeys().hasOnly(...)
             const allowedSellerUpdate: Record<string, unknown> = {
@@ -2552,7 +2559,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!isDemoMode) {
         try {
           if (currentUser.role === 'admin' || !existingCoupon) {
-            await setDoc(doc(db, 'coupons', sanitizedCoupon.id), sanitizedCoupon);
+            const cleanCouponPayload = Object.fromEntries(
+              Object.entries(sanitizedCoupon).filter(([, v]) => v !== undefined)
+            );
+            await setDoc(doc(db, 'coupons', sanitizedCoupon.id), cleanCouponPayload);
           } else {
             const allowedCouponUpdate: Record<string, unknown> = {
               code: sanitizedCoupon.code,
@@ -2692,11 +2702,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         sellerReplyEn: replyText.trim(),
         sellerReplyAt: nowDate,
       };
-      if (!isDemoMode && currentUser.role === 'admin') {
+      if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'reviews', reviewId), updated);
+          await updateDoc(doc(db, 'reviews', reviewId), {
+            sellerReplyAr: updated.sellerReplyAr,
+            sellerReplyEn: updated.sellerReplyEn,
+            sellerReplyAt: updated.sellerReplyAt,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'reviews');
+          showToast(
+            lang === 'ar' ? 'تعذر نشر رد المتجر على التقييم' : 'Failed to publish merchant reply',
+            undefined,
+            'error'
+          );
+          return;
         }
       }
       setReviews((prev) => prev.map((r) => (r.id === reviewId ? updated : r)));
@@ -2735,27 +2755,36 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         updatedAt: new Date().toISOString(),
       };
 
-      if (!isDemoMode && currentUser.role === 'seller') {
-        // Production seller submits an official return inspection ticket for Admin/Treasury final disposition
-        try {
-          const returnTicket: SupportTicket = {
-            id: `tkt-ret-${Date.now()}`,
-            ticketNumber: `RET-${Math.floor(1000 + Math.random() * 9000)}`,
-            userId: auth.currentUser?.uid || currentUser.id,
-            userName: currentUser.name,
-            userEmail: currentUser.email,
-            categoryAr: 'توصية فحص مرتجعات التاجر',
-            categoryEn: 'Merchant Return Inspection Report',
-            subject: `تقرير فحص مرتجع الطلب #${target.orderNumber} (${recommendation})`,
-            message: merchantNote.trim() || 'تم فحص حالة المرتجع من قِبل المتجر ورفع التوصية للإدارة.',
-            orderNumber: target.orderNumber,
-            status: 'open',
-            createdAt: new Date().toISOString().split('T')[0],
-          };
-          await setDoc(doc(db, 'tickets', returnTicket.id), returnTicket);
-          setTickets((prev) => [returnTicket, ...prev]);
-        } catch (e) {
-          logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+      if (!isDemoMode) {
+        if (currentUser.role === 'admin') {
+          try {
+            await setDoc(doc(db, 'orders', orderId), updatedOrder);
+          } catch (e) {
+            logFirestoreFailure(e, OperationType.UPDATE, 'orders');
+          }
+        } else if (currentUser.role === 'seller') {
+          // Production seller submits an official return inspection ticket for Admin/Treasury final disposition
+          try {
+            const returnTicket: SupportTicket = {
+              id: `tkt-ret-${Date.now()}`,
+              ticketNumber: `RET-${Math.floor(1000 + Math.random() * 9000)}`,
+              userId: auth.currentUser?.uid || currentUser.id,
+              userName: currentUser.name,
+              userEmail: currentUser.email,
+              categoryAr: 'توصية فحص مرتجعات التاجر',
+              categoryEn: 'Merchant Return Inspection Report',
+              subject: `تقرير فحص مرتجع الطلب #${target.orderNumber} (${recommendation})`,
+              message: merchantNote.trim() || 'تم فحص حالة المرتجع من قِبل المتجر ورفع التوصية للإدارة.',
+              orderNumber: target.orderNumber,
+              returnRecommendation: recommendation,
+              status: 'open',
+              createdAt: new Date().toISOString().split('T')[0],
+            };
+            await setDoc(doc(db, 'tickets', returnTicket.id), returnTicket);
+            setTickets((prev) => [returnTicket, ...prev]);
+          } catch (e) {
+            logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+          }
         }
       }
 
@@ -2860,6 +2889,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           | 'categories'
           | 'crNumber'
           | 'vatNumber'
+          | 'operationalSettings'
         >
       >
     ) => {
@@ -2878,7 +2908,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const target = sellers.find((s) => s.id === sellerId);
       if (!target) return;
 
-      // Strictly whitelist only safe business/profile fields; never allow financial or approval fields
+      // Strictly whitelist only safe business/profile/operational fields; never allow financial or approval fields
       const allowedPayload: Record<string, unknown> = {};
       const allowedKeys = [
         'nameAr',
@@ -2894,6 +2924,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'categories',
         'crNumber',
         'vatNumber',
+        'operationalSettings',
       ] as const;
 
       for (const key of allowedKeys) {
@@ -3173,16 +3204,24 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         return;
       }
       const sellerDoc = sellers.find((s) => s.id === (prod?.sellerId || currentUser.sellerId));
+      const nowDate = new Date().toISOString().split('T')[0];
       const updated: ProductQuestion = {
         ...target,
-        answerAr: answerText,
-        answerEn: answerText,
+        answerAr: answerText.trim(),
+        answerEn: answerText.trim(),
         answeredByAr: sellerDoc ? `${sellerDoc.nameAr} (تاجر معتمد)` : currentUser.name || 'إدارة أثيل',
         answeredByEn: sellerDoc ? `${sellerDoc.nameEn} (Verified Seller)` : currentUser.name || 'Atheel Concierge',
+        answeredAt: nowDate,
       };
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'questions', questionId), updated);
+          await updateDoc(doc(db, 'questions', questionId), {
+            answerAr: updated.answerAr,
+            answerEn: updated.answerEn,
+            answeredByAr: updated.answeredByAr,
+            answeredByEn: updated.answeredByEn,
+            answeredAt: updated.answeredAt,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'questions');
           showToast(lang === 'ar' ? 'تعذر نشر الإجابة' : 'Failed to publish answer', undefined, 'error');

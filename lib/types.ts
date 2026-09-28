@@ -115,6 +115,17 @@ export interface SellerPayout {
   date: string;
 }
 
+export interface SellerOperationalSettings {
+  defaultCarrier: string;
+  sameDayCutoff: string;
+  luxuryPackagingEnabled: boolean;
+  coldChainEnabled: boolean;
+  autoZatcaInvoice: boolean;
+  whatsappOrderAlerts: boolean;
+  lowStockEmailAlerts: boolean;
+  updatedAt?: string;
+}
+
 export interface Seller {
   id: string;
   nameAr: string;
@@ -143,6 +154,7 @@ export interface Seller {
   joinedAt: string;
   categories: string[];
   payoutHistory: SellerPayout[];
+  operationalSettings?: SellerOperationalSettings;
 }
 
 export interface SaudiAddress {
@@ -298,6 +310,7 @@ export interface ProductQuestion {
   answerEn?: string;
   answeredByAr?: string;
   answeredByEn?: string;
+  answeredAt?: string;
   createdAt: string;
 }
 
@@ -357,6 +370,7 @@ export interface SupportTicket {
   subject: string;
   message: string;
   orderNumber?: string;
+  returnRecommendation?: 'approve_restock' | 'inspect_required' | 'dispute';
   status: 'open' | 'in_progress' | 'resolved';
   createdAt: string;
   replyAr?: string;

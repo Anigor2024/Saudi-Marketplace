@@ -41,7 +41,7 @@ export default function SellerOrdersAndReturns({
   sellerOrders,
   mode,
 }: SellerOrdersProps) {
-  const { lang, t, formatPrice, updateOrderStatus, respondToReturnRequest } = useMarketplace();
+  const { lang, t, formatPrice, tickets, updateOrderStatus, respondToReturnRequest } = useMarketplace();
 
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -569,17 +569,29 @@ export default function SellerOrdersAndReturns({
                               </div>
                             )}
 
-                            {order.returnRequest?.sellerInspectionNote && (
-                              <div className="p-3 rounded-xl bg-[#EBF3F0] border border-[#0B4F3F]/30 text-xs space-y-1">
-                                <div className="font-bold text-[#0B4F3F]">
-                                  {t('تقرير فحص المتجر المسجل:', 'Recorded Merchant Inspection:')} (
-                                  {order.returnRequest.sellerRecommendation})
+                            {(() => {
+                              const persistedReturnTicket = tickets.find(
+                                (tkt) =>
+                                  tkt.orderNumber === order.orderNumber &&
+                                  tkt.ticketNumber.startsWith('RET-')
+                              );
+                              const effectiveNote =
+                                order.returnRequest?.sellerInspectionNote ||
+                                persistedReturnTicket?.message;
+                              const effectiveRec =
+                                order.returnRequest?.sellerRecommendation ||
+                                persistedReturnTicket?.returnRecommendation;
+                              if (!effectiveNote) return null;
+                              return (
+                                <div className="p-3 rounded-xl bg-[#EBF3F0] border border-[#0B4F3F]/30 text-xs space-y-1">
+                                  <div className="font-bold text-[#0B4F3F]">
+                                    {t('تقرير فحص المتجر المسجل:', 'Recorded Merchant Inspection:')}{' '}
+                                    ({effectiveRec})
+                                  </div>
+                                  <p className="text-[#141413]">{effectiveNote}</p>
                                 </div>
-                                <p className="text-[#141413]">
-                                  {order.returnRequest.sellerInspectionNote}
-                                </p>
-                              </div>
-                            )}
+                              );
+                            })()}
 
                             <div className="space-y-3 pt-2 border-t border-[#E6E0D6]">
                               <label className="block text-xs font-bold text-[#141413]">

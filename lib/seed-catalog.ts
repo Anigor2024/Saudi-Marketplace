@@ -325,6 +325,16 @@ export const INITIAL_SELLERS: Seller[] = [
       { id: 'pay-101', amount: 82400, status: 'completed', bankNameAr: 'مصرف الراجحي', bankNameEn: 'Al Rajhi Bank', ibanLast4: '7519', date: '2026-09-05' },
       { id: 'pay-102', amount: 74150, status: 'completed', bankNameAr: 'مصرف الراجحي', bankNameEn: 'Al Rajhi Bank', ibanLast4: '7519', date: '2026-08-05' },
     ],
+    operationalSettings: {
+      defaultCarrier: 'SPL Express VIP',
+      sameDayCutoff: '16:00',
+      luxuryPackagingEnabled: true,
+      coldChainEnabled: true,
+      autoZatcaInvoice: true,
+      whatsappOrderAlerts: true,
+      lowStockEmailAlerts: true,
+      updatedAt: '2026-09-20',
+    },
   },
   {
     id: 'seller-2',
@@ -358,6 +368,16 @@ export const INITIAL_SELLERS: Seller[] = [
       { id: 'pay-202', amount: 132600, status: 'completed', bankNameAr: 'البنك الأهلي السعودي SNB', bankNameEn: 'Saudi National Bank', ibanLast4: '1234', date: '2026-08-01' },
       { id: 'pay-203', amount: 118450, status: 'scheduled', bankNameAr: 'البنك الأهلي السعودي SNB', bankNameEn: 'Saudi National Bank', ibanLast4: '1234', date: '2026-10-01' },
     ],
+    operationalSettings: {
+      defaultCarrier: 'Aramex Premium',
+      sameDayCutoff: '17:00',
+      luxuryPackagingEnabled: true,
+      coldChainEnabled: true,
+      autoZatcaInvoice: true,
+      whatsappOrderAlerts: true,
+      lowStockEmailAlerts: true,
+      updatedAt: '2026-09-25',
+    },
   },
   {
     id: 'seller-3',

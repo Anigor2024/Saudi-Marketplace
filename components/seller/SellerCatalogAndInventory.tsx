@@ -122,6 +122,8 @@ export default function SellerCatalogAndInventory({
   const [formSubcategoryAr, setFormSubcategoryAr] = useState('');
   const [formSubcategoryEn, setFormSubcategoryEn] = useState('');
   const [formBrandId, setFormBrandId] = useState('');
+  const [formBrandNameAr, setFormBrandNameAr] = useState('');
+  const [formBrandNameEn, setFormBrandNameEn] = useState('');
   const [formPrice, setFormPrice] = useState<number>(1000);
   const [formOriginalPrice, setFormOriginalPrice] = useState<number>(1200);
   const [formStock, setFormStock] = useState<number>(15);
@@ -132,6 +134,9 @@ export default function SellerCatalogAndInventory({
   const [formDeliveryAr, setFormDeliveryAr] = useState('توصيل سريع خلال ٢٤ - ٤٨ ساعة');
   const [formDeliveryEn, setFormDeliveryEn] = useState('Express Delivery in 24-48 Hours');
   const [formIsFlashDeal, setFormIsFlashDeal] = useState(false);
+  const [formFlashDealEndsAt, setFormFlashDealEndsAt] = useState('2026-12-31');
+  const [formIsSeasonal, setFormIsSeasonal] = useState(false);
+  const [formFrequentlyBoughtWith, setFormFrequentlyBoughtWith] = useState<string[]>([]);
   const [formImages, setFormImages] = useState<string[]>([]);
   const [newImageUrl, setNewImageUrl] = useState('');
   const [formVariants, setFormVariants] = useState<ProductVariantGroup[]>([]);
@@ -196,6 +201,8 @@ export default function SellerCatalogAndInventory({
       setFormSubcategoryAr(prod.subcategoryAr);
       setFormSubcategoryEn(prod.subcategoryEn);
       setFormBrandId(prod.brandId);
+      setFormBrandNameAr(prod.brandNameAr);
+      setFormBrandNameEn(prod.brandNameEn);
       setFormPrice(prod.price);
       setFormOriginalPrice(prod.originalPrice);
       setFormStock(prod.stock);
@@ -206,6 +213,13 @@ export default function SellerCatalogAndInventory({
       setFormDeliveryAr(prod.deliveryEstimateAr);
       setFormDeliveryEn(prod.deliveryEstimateEn);
       setFormIsFlashDeal(prod.isFlashDeal);
+      setFormFlashDealEndsAt(
+        prod.flashDealEndsAt ? prod.flashDealEndsAt.split('T')[0] : '2026-12-31'
+      );
+      setFormIsSeasonal(Boolean(prod.isSeasonal));
+      setFormFrequentlyBoughtWith(
+        prod.frequentlyBoughtWith ? [...prod.frequentlyBoughtWith] : []
+      );
       setFormImages(prod.images.length > 0 ? [...prod.images] : [LUXURY_IMAGE_PRESETS[0].url]);
       setFormVariants(prod.variants ? JSON.parse(JSON.stringify(prod.variants)) : []);
       setFormSpecs(prod.specifications ? JSON.parse(JSON.stringify(prod.specifications)) : []);
@@ -223,6 +237,8 @@ export default function SellerCatalogAndInventory({
       setFormSubcategoryAr(defaultSub?.nameAr || 'إصدارات فاخرة');
       setFormSubcategoryEn(defaultSub?.nameEn || 'Luxury Editions');
       setFormBrandId(defaultBrand?.id || 'brand-1');
+      setFormBrandNameAr(defaultBrand?.nameAr || 'علامة معتمدة');
+      setFormBrandNameEn(defaultBrand?.nameEn || 'Verified Brand');
       setFormPrice(1450);
       setFormOriginalPrice(1750);
       setFormStock(20);
@@ -233,6 +249,9 @@ export default function SellerCatalogAndInventory({
       setFormDeliveryAr('شحن مبرد وسريع خلال ٢٤ - ٤٨ ساعة لكافة مدن المملكة');
       setFormDeliveryEn('Express VIP Delivery within 24-48 Hours across KSA');
       setFormIsFlashDeal(false);
+      setFormFlashDealEndsAt('2026-12-31');
+      setFormIsSeasonal(false);
+      setFormFrequentlyBoughtWith([]);
       setFormImages([LUXURY_IMAGE_PRESETS[0].url]);
       setFormVariants([
         {
@@ -304,8 +323,8 @@ export default function SellerCatalogAndInventory({
       subcategoryAr: formSubcategoryAr.trim() || 'مقتنيات فاخرة',
       subcategoryEn: formSubcategoryEn.trim() || 'Luxury Goods',
       brandId: selectedBrand?.id || 'brand-1',
-      brandNameAr: selectedBrand?.nameAr || 'علامة معتمدة',
-      brandNameEn: selectedBrand?.nameEn || 'Verified Brand',
+      brandNameAr: formBrandNameAr.trim() || selectedBrand?.nameAr || 'علامة معتمدة',
+      brandNameEn: formBrandNameEn.trim() || selectedBrand?.nameEn || 'Verified Brand',
       sellerId: seller.id,
       sellerNameAr: seller.nameAr,
       sellerNameEn: seller.nameEn,
@@ -328,7 +347,11 @@ export default function SellerCatalogAndInventory({
       deliveryEstimateAr: formDeliveryAr.trim(),
       deliveryEstimateEn: formDeliveryEn.trim(),
       isFlashDeal: formIsFlashDeal,
-      flashDealEndsAt: formIsFlashDeal ? '2026-12-31T23:59:59Z' : undefined,
+      flashDealEndsAt: formIsFlashDeal
+        ? `${formFlashDealEndsAt || '2026-12-31'}T23:59:59Z`
+        : undefined,
+      isSeasonal: formIsSeasonal,
+      frequentlyBoughtWith: formFrequentlyBoughtWith.slice(0, 10),
       isFeatured: editingProduct ? editingProduct.isFeatured : false,
       isTrending: editingProduct ? editingProduct.isTrending : false,
       isBestSeller: editingProduct ? editingProduct.isBestSeller : false,
@@ -1094,11 +1117,18 @@ export default function SellerCatalogAndInventory({
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-[#141413] mb-1">
-                        {t('العلامة التجارية', 'Brand')}
+                        {t('العلامة التجارية المعتمدة', 'Brand Selection')}
                       </label>
                       <select
                         value={formBrandId}
-                        onChange={(e) => setFormBrandId(e.target.value)}
+                        onChange={(e) => {
+                          const chosen = brands.find((b) => b.id === e.target.value);
+                          setFormBrandId(e.target.value);
+                          if (chosen) {
+                            setFormBrandNameAr(chosen.nameAr);
+                            setFormBrandNameEn(chosen.nameEn);
+                          }
+                        }}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-semibold"
                       >
                         {brands.map((b) => (
@@ -1107,6 +1137,70 @@ export default function SellerCatalogAndInventory({
                           </option>
                         ))}
                       </select>
+                    </div>
+                  </div>
+
+                  {/* Subcategory & Custom Brand Names */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-[#141413] mb-1">
+                        {t('التصنيف الفرعي بالعربية *', 'Subcategory (Arabic) *')}
+                      </label>
+                      <input
+                        type="text"
+                        value={formSubcategoryAr}
+                        onChange={(e) => setFormSubcategoryAr(e.target.value)}
+                        list="subcats-ar-list"
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs"
+                      />
+                      <datalist id="subcats-ar-list">
+                        {(categories.find((c) => c.id === formCategoryId)?.subcategories || []).map(
+                          (sub) => (
+                            <option key={sub.id} value={sub.nameAr} />
+                          )
+                        )}
+                      </datalist>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-[#141413] mb-1">
+                        {t('التصنيف الفرعي بالإنجليزية *', 'Subcategory (English) *')}
+                      </label>
+                      <input
+                        type="text"
+                        value={formSubcategoryEn}
+                        onChange={(e) => setFormSubcategoryEn(e.target.value)}
+                        list="subcats-en-list"
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs"
+                      />
+                      <datalist id="subcats-en-list">
+                        {(categories.find((c) => c.id === formCategoryId)?.subcategories || []).map(
+                          (sub) => (
+                            <option key={sub.id} value={sub.nameEn} />
+                          )
+                        )}
+                      </datalist>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-[#141413] mb-1">
+                        {t('اسم العلامة التجارية (عربي)', 'Brand Name (Arabic)')}
+                      </label>
+                      <input
+                        type="text"
+                        value={formBrandNameAr}
+                        onChange={(e) => setFormBrandNameAr(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-[#141413] mb-1">
+                        {t('اسم العلامة التجارية (إنجليزي)', 'Brand Name (English)')}
+                      </label>
+                      <input
+                        type="text"
+                        value={formBrandNameEn}
+                        onChange={(e) => setFormBrandNameEn(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs"
+                      />
                     </div>
                   </div>
 
@@ -1259,6 +1353,92 @@ export default function SellerCatalogAndInventory({
                       </label>
                     </div>
                   </div>
+
+                  {/* Flash Deal End Date, Seasonal Flag & Frequently Bought Together Bundles */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#E6E0D6]">
+                    <div className="space-y-3">
+                      {formIsFlashDeal && (
+                        <div>
+                          <label className="block text-xs font-bold text-[#141413] mb-1">
+                            {t('تاريخ انتهاء العرض الخاطف', 'Flash Deal End Date')}
+                          </label>
+                          <input
+                            type="date"
+                            value={formFlashDealEndsAt}
+                            onChange={(e) => setFormFlashDealEndsAt(e.target.value)}
+                            className="w-full px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs font-mono"
+                          />
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2.5 p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formIsSeasonal}
+                          onChange={(e) => setFormIsSeasonal(e.target.checked)}
+                          className="rounded text-[#0B4F3F]"
+                        />
+                        <div>
+                          <span className="text-xs font-bold text-[#141413] block">
+                            {t(
+                              'إدراج في التشكيلة الموسمية الفاخرة (رمضان / الأعياد / اليوم الوطني)',
+                              'Include in Seasonal Luxury Collection'
+                            )}
+                          </span>
+                          <span className="text-[11px] text-[#8C857B]">
+                            {t(
+                              'يظهر في قسم الهدايا والمواسم الخاصة بالمتجر',
+                              'Featured in seasonal gifting & curations'
+                            )}
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#141413] mb-1">
+                        {t(
+                          'يُشترى غالباً مع (ربط منتجات مكملة من متجرك)',
+                          'Frequently Bought Together (Bundle from your SKUs)'
+                        )}
+                      </label>
+                      <div className="max-h-28 overflow-y-auto p-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-1.5">
+                        {sellerProducts
+                          .filter((sp) => !editingProduct || sp.id !== editingProduct.id)
+                          .map((sp) => {
+                            const checked = formFrequentlyBoughtWith.includes(sp.id);
+                            return (
+                              <label
+                                key={sp.id}
+                                className="flex items-center justify-between gap-2 text-xs cursor-pointer hover:bg-white p-1 rounded"
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setFormFrequentlyBoughtWith((prev) =>
+                                        checked
+                                          ? prev.filter((id) => id !== sp.id)
+                                          : prev.length < 4
+                                          ? [...prev, sp.id]
+                                          : prev
+                                      );
+                                    }}
+                                    className="rounded text-[#0B4F3F]"
+                                  />
+                                  <span className="truncate font-medium text-[#141413]">
+                                    {lang === 'ar' ? sp.titleAr : sp.titleEn}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-[10px] text-[#0B4F3F] shrink-0">
+                                  {formatPrice(sp.price)}
+                                </span>
+                              </label>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1326,21 +1506,38 @@ export default function SellerCatalogAndInventory({
                           referrerPolicy="no-referrer"
                           className="w-full h-28 object-cover"
                         />
-                        <div className="p-2 flex items-center justify-between bg-white text-[10px]">
+                        <div className="p-2 flex items-center justify-between bg-white text-[10px] gap-1">
                           <span className="font-bold text-[#0B4F3F]">
-                            {i === 0 ? t('الصورة الرئيسية', 'Primary') : `#${i + 1}`}
+                            {i === 0 ? t('الصورة الرئيسية ★', 'Primary ★') : `#${i + 1}`}
                           </span>
-                          {formImages.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setFormImages((prev) => prev.filter((_, idx) => idx !== i))
-                              }
-                              className="text-[#9E2A2B] font-bold"
-                            >
-                              {t('حذف', 'Remove')}
-                            </button>
-                          )}
+                          <div className="flex items-center gap-1.5">
+                            {i > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFormImages((prev) => {
+                                    const copy = [...prev];
+                                    const [picked] = copy.splice(i, 1);
+                                    return [picked, ...copy];
+                                  })
+                                }
+                                className="text-[#0B4F3F] font-bold hover:underline"
+                              >
+                                {t('تعيين كرئيسية', 'Set Primary')}
+                              </button>
+                            )}
+                            {formImages.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFormImages((prev) => prev.filter((_, idx) => idx !== i))
+                                }
+                                className="text-[#9E2A2B] font-bold"
+                              >
+                                {t('حذف', 'Remove')}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -1393,7 +1590,7 @@ export default function SellerCatalogAndInventory({
                       className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-3"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 flex-1">
                           <input
                             type="text"
                             value={group.nameAr}
@@ -1416,6 +1613,24 @@ export default function SellerCatalogAndInventory({
                             placeholder="Group Name En (e.g. Size)"
                             className="px-3 py-1.5 rounded-lg bg-white border border-[#E6E0D6] text-xs"
                           />
+                          <select
+                            value={group.type}
+                            onChange={(e) => {
+                              const next = [...formVariants];
+                              next[gIdx].type = e.target.value as
+                                | 'color'
+                                | 'size'
+                                | 'capacity'
+                                | 'option';
+                              setFormVariants(next);
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-white border border-[#E6E0D6] text-xs font-semibold text-[#0B4F3F]"
+                          >
+                            <option value="option">{t('خيار عام (Option)', 'Option')}</option>
+                            <option value="color">{t('لون (Color Swatch)', 'Color')}</option>
+                            <option value="size">{t('مقاس / حجم (Size)', 'Size')}</option>
+                            <option value="capacity">{t('سعة تخزين (Capacity)', 'Capacity')}</option>
+                          </select>
                         </div>
                         <button
                           type="button"
@@ -1430,7 +1645,7 @@ export default function SellerCatalogAndInventory({
 
                       <div className="space-y-2">
                         {group.options.map((opt, oIdx) => (
-                          <div key={opt.id} className="grid grid-cols-1 sm:grid-cols-4 gap-2 items-center">
+                          <div key={opt.id} className="grid grid-cols-1 sm:grid-cols-5 gap-2 items-center">
                             <input
                               type="text"
                               value={opt.labelAr}
@@ -1448,11 +1663,49 @@ export default function SellerCatalogAndInventory({
                               onChange={(e) => {
                                 const next = [...formVariants];
                                 next[gIdx].options[oIdx].labelEn = e.target.value;
+                                next[gIdx].options[oIdx].value =
+                                  e.target.value.toLowerCase().replace(/\s+/g, '-') || opt.value;
                                 setFormVariants(next);
                               }}
                               placeholder="Label En"
                               className="px-2.5 py-1.5 rounded-lg bg-white border border-[#E6E0D6] text-xs"
                             />
+                            {group.type === 'color' ? (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="color"
+                                  value={opt.colorHex || '#0B4F3F'}
+                                  onChange={(e) => {
+                                    const next = [...formVariants];
+                                    next[gIdx].options[oIdx].colorHex = e.target.value;
+                                    setFormVariants(next);
+                                  }}
+                                  className="w-7 h-7 rounded cursor-pointer border border-[#E6E0D6]"
+                                />
+                                <input
+                                  type="text"
+                                  value={opt.colorHex || '#0B4F3F'}
+                                  onChange={(e) => {
+                                    const next = [...formVariants];
+                                    next[gIdx].options[oIdx].colorHex = e.target.value;
+                                    setFormVariants(next);
+                                  }}
+                                  className="w-full px-2 py-1.5 rounded-lg bg-white border border-[#E6E0D6] text-[11px] font-mono"
+                                />
+                              </div>
+                            ) : (
+                              <input
+                                type="text"
+                                value={opt.value}
+                                onChange={(e) => {
+                                  const next = [...formVariants];
+                                  next[gIdx].options[oIdx].value = e.target.value;
+                                  setFormVariants(next);
+                                }}
+                                placeholder={t('القيمة البرمجية', 'Option Code')}
+                                className="px-2.5 py-1.5 rounded-lg bg-white border border-[#E6E0D6] text-xs font-mono"
+                              />
+                            )}
                             <input
                               type="number"
                               value={opt.priceDelta || 0}

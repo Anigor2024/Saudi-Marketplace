@@ -92,6 +92,8 @@ function MarketplaceShell() {
     deleteAddress,
     submitSellerApplication,
     submitReview,
+    questions,
+    submitQuestion,
     toasts,
     dismissToast,
   } = useMarketplace();
@@ -103,6 +105,7 @@ function MarketplaceShell() {
   const [reviewTitle, setReviewTitle] = useState<string>('');
   const [reviewComment, setReviewComment] = useState<string>('');
   const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
+  const [questionInput, setQuestionInput] = useState<string>('');
 
   // Account & Seller Application form state
   const [profileName, setProfileName] = useState<string | null>(null);
@@ -718,10 +721,132 @@ function MarketplaceShell() {
                               <div className="text-[10px] font-mono text-[#8C857B]">
                                 {rev.createdAt}
                               </div>
+                              {(rev.sellerReplyAr || rev.sellerReplyEn) && (
+                                <div className="mt-2.5 p-3 rounded-xl bg-[#EBF3F0]/80 border border-[#0B4F3F]/25 space-y-1">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-[11px] font-bold text-[#0B4F3F] flex items-center gap-1.5">
+                                      <Store className="w-3.5 h-3.5 text-[#C59B27]" />
+                                      <span>
+                                        {t('رد رسمي من البوتيك:', 'Official Boutique Reply:')}{' '}
+                                        {lang === 'ar'
+                                          ? currentProduct.sellerNameAr
+                                          : currentProduct.sellerNameEn}
+                                      </span>
+                                    </span>
+                                    {rev.sellerReplyAt && (
+                                      <span className="text-[10px] font-mono text-[#57534E]">
+                                        {rev.sellerReplyAt}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-[#141413] leading-relaxed">
+                                    {lang === 'ar'
+                                      ? rev.sellerReplyAr || rev.sellerReplyEn
+                                      : rev.sellerReplyEn || rev.sellerReplyAr}
+                                  </p>
+                                </div>
+                              )}
                             </div>
                           ))
                       )}
                     </div>
+                  </div>
+                </div>
+
+                {/* Product Q&A Section */}
+                <div className="bg-white rounded-2xl p-6 border border-[#E6E0D6] space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#E6E0D6] pb-3">
+                    <div>
+                      <h2 className="text-base font-bold text-[#141413]">
+                        {t('الأسئلة والأجوبة حول المنتج', 'Product Questions & Answers')}
+                      </h2>
+                      <p className="text-xs text-[#8C857B] mt-0.5">
+                        {t(
+                          'استفسر مباشرة من التاجر المعتمد حول الخامة، المقاسات، أو التغليف',
+                          'Ask the verified boutique directly about materials, sizing, or packaging'
+                        )}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <input
+                        type="text"
+                        value={questionInput}
+                        onChange={(e) => setQuestionInput(e.target.value)}
+                        placeholder={t('اكتب سؤالك هنا عن المنتج...', 'Write your question about this product...')}
+                        className="flex-1 sm:w-72 px-3.5 py-2 rounded-xl border border-[#E6E0D6] bg-[#FAF8F5] text-xs focus:outline-none focus:border-[#0B4F3F]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!questionInput.trim()) return;
+                          submitQuestion(currentProduct.id, questionInput.trim());
+                          setQuestionInput('');
+                        }}
+                        className="px-4 py-2 rounded-xl bg-[#0B4F3F] hover:bg-[#083D30] text-white text-xs font-bold transition-all shrink-0"
+                      >
+                        {t('إرسال السؤال', 'Ask Boutique')}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {questions.filter((q) => q.productId === currentProduct.id).length === 0 ? (
+                      <div className="p-6 rounded-xl bg-[#FAF8F5] text-center text-xs text-[#8C857B]">
+                        {t(
+                          'لا توجد استفسارات مسجلة لهذا المنتج حتى الآن. كن أول من يسأل البوتيك.',
+                          'No questions asked for this product yet. Be the first to ask the boutique.'
+                        )}
+                      </div>
+                    ) : (
+                      questions
+                        .filter((q) => q.productId === currentProduct.id)
+                        .map((q) => {
+                          const hasAnswer = Boolean(q.answerAr?.trim() || q.answerEn?.trim());
+                          return (
+                            <div
+                              key={q.id}
+                              className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-2.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-bold text-[#141413]">
+                                  {t('سؤال من:', 'Question by:')} {q.userName}
+                                </span>
+                                <span className="text-[10px] font-mono text-[#8C857B]">
+                                  {q.createdAt}
+                                </span>
+                              </div>
+                              <p className="text-xs font-semibold text-[#141413]">
+                                {lang === 'ar' ? q.questionAr : q.questionEn}
+                              </p>
+                              {hasAnswer ? (
+                                <div className="p-3 rounded-xl bg-[#EBF3F0]/80 border border-[#0B4F3F]/25 space-y-1">
+                                  <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-[#0B4F3F]">
+                                    <span>
+                                      {lang === 'ar'
+                                        ? q.answeredByAr || currentProduct.sellerNameAr
+                                        : q.answeredByEn || currentProduct.sellerNameEn}
+                                    </span>
+                                    {q.answeredAt && (
+                                      <span className="text-[10px] font-mono text-[#57534E]">
+                                        {q.answeredAt}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-[#141413] leading-relaxed">
+                                    {lang === 'ar'
+                                      ? q.answerAr || q.answerEn
+                                      : q.answerEn || q.answerAr}
+                                  </p>
+                                </div>
+                              ) : (
+                                <div className="text-[11px] text-[#B8860B] font-semibold">
+                                  {t('بانتظار الرد الرسمي من البوتيك...', 'Awaiting official boutique response...')}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                    )}
                   </div>
                 </div>
               </div>

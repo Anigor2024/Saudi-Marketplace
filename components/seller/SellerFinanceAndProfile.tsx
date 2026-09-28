@@ -37,6 +37,7 @@ export default function SellerFinanceAndProfile({
     t,
     formatPrice,
     categories,
+    tickets,
     updateSellerProfile,
     requestSellerPayout,
     showToast,
@@ -65,15 +66,29 @@ export default function SellerFinanceAndProfile({
   const [selectedCats, setSelectedCats] = useState<string[]>(seller.categories || []);
 
   // ============================================================================
-  // 3. OPERATIONAL SETTINGS STATE
+  // 3. OPERATIONAL SETTINGS STATE (PERSISTED ON SELLER DOCUMENT)
   // ============================================================================
-  const [defaultCarrier, setDefaultCarrier] = useState('SPL Express VIP');
-  const [sameDayCutoff, setSameDayCutoff] = useState('16:00');
-  const [luxuryPackagingEnabled, setLuxuryPackagingEnabled] = useState(true);
-  const [coldChainEnabled, setColdChainEnabled] = useState(true);
-  const [autoZatcaInvoice, setAutoZatcaInvoice] = useState(true);
-  const [whatsappOrderAlerts, setWhatsappOrderAlerts] = useState(true);
-  const [lowStockEmailAlerts, setLowStockEmailAlerts] = useState(true);
+  const [defaultCarrier, setDefaultCarrier] = useState(
+    seller.operationalSettings?.defaultCarrier || 'SPL Express VIP'
+  );
+  const [sameDayCutoff, setSameDayCutoff] = useState(
+    seller.operationalSettings?.sameDayCutoff || '16:00'
+  );
+  const [luxuryPackagingEnabled, setLuxuryPackagingEnabled] = useState(
+    seller.operationalSettings?.luxuryPackagingEnabled ?? true
+  );
+  const [coldChainEnabled, setColdChainEnabled] = useState(
+    seller.operationalSettings?.coldChainEnabled ?? true
+  );
+  const [autoZatcaInvoice, setAutoZatcaInvoice] = useState(
+    seller.operationalSettings?.autoZatcaInvoice ?? true
+  );
+  const [whatsappOrderAlerts, setWhatsappOrderAlerts] = useState(
+    seller.operationalSettings?.whatsappOrderAlerts ?? true
+  );
+  const [lowStockEmailAlerts, setLowStockEmailAlerts] = useState(
+    seller.operationalSettings?.lowStockEmailAlerts ?? true
+  );
 
   // Order-by-order financial ledger
   const orderLedger = useMemo(() => {
@@ -394,12 +409,12 @@ export default function SellerFinanceAndProfile({
             <div className="flex items-center justify-between border-b border-[#E6E0D6] pb-3">
               <div>
                 <h3 className="text-base font-bold text-[#141413]">
-                  {t('سجل التحويلات البنكية السابقة', 'Historical Bank Payouts & Transfers')}
+                  {t('سجل التحويلات البنكية وطلبات التسوية', 'Bank Payouts & Treasury Settlement Requests')}
                 </h3>
                 <p className="text-xs text-[#57534E]">
                   {t(
-                    'جميع الحوالات البنكية المنفذة إلى حساب الآيبان المعتمد الخاص بمتجرك.',
-                    'All SARIE bank transfers settled to your verified Saudi IBAN.'
+                    'جميع الحوالات البنكية المنفذة وطلبات السحب المرفوعة للخزانة المركزية.',
+                    'All SARIE bank transfers and active treasury payout requests.'
                   )}
                 </p>
               </div>
@@ -407,6 +422,34 @@ export default function SellerFinanceAndProfile({
                 {seller.payoutHistory.length} {t('حوالة', 'transfers')}
               </span>
             </div>
+
+            {/* Active Production Treasury Payout Requests */}
+            {tickets
+              .filter(
+                (tkt) =>
+                  tkt.ticketNumber.startsWith('PAY-') &&
+                  (tkt.subject.includes(seller.nameAr) || tkt.message.includes(seller.iban))
+              )
+              .map((tkt) => (
+                <div
+                  key={tkt.id}
+                  className="p-4 rounded-xl bg-[#FBF7EC] border border-[#C59B27]/50 flex flex-wrap items-center justify-between gap-3 text-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-[#141413]">#{tkt.ticketNumber}</span>
+                      <span className="px-2 py-0.5 rounded bg-amber-100 text-[#C87D12] text-[10px] font-bold uppercase">
+                        {t('طلب تسوية قيد المراجعة المالية', 'Pending Treasury Settlement')}
+                      </span>
+                    </div>
+                    <div className="font-semibold text-[#141413]">{tkt.subject}</div>
+                    <div className="text-[11px] text-[#57534E]">{tkt.message}</div>
+                  </div>
+                  <div className="text-end font-mono text-[11px] text-[#8C857B]">
+                    {tkt.createdAt}
+                  </div>
+                </div>
+              ))}
 
             {seller.payoutHistory.length === 0 ? (
               <div className="p-8 text-center text-xs text-[#8C857B]">
@@ -601,7 +644,7 @@ export default function SellerFinanceAndProfile({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div>
               <label className="block text-xs font-bold text-[#141413] mb-1">
                 {t('اسم المالك / المدير المفوض', 'Authorized Owner Name')}
@@ -637,7 +680,7 @@ export default function SellerFinanceAndProfile({
             </div>
             <div>
               <label className="block text-xs font-bold text-[#141413] mb-1">
-                {t('المدينة الرئيسية للمستودع', 'Primary Hub City')}
+                {t('المدينة الرئيسية (عربي)', 'Primary Hub City (Arabic)')}
               </label>
               <input
                 type="text"
@@ -645,6 +688,51 @@ export default function SellerFinanceAndProfile({
                 onChange={(e) => setCityAr(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs"
               />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-[#141413] mb-1">
+                {t('المدينة الرئيسية (إنجليزي)', 'Primary Hub City (English)')}
+              </label>
+              <input
+                type="text"
+                value={cityEn}
+                onChange={(e) => setCityEn(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs"
+              />
+            </div>
+          </div>
+
+          {/* Store Specialized Categories Selector */}
+          <div>
+            <label className="block text-xs font-bold text-[#141413] mb-2">
+              {t('الأقسام المعتمدة لنشاط المتجر', 'Authorized Storefront Categories')}
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {categories.map((cat) => {
+                const isSelected = selectedCats.includes(cat.id);
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() =>
+                      setSelectedCats((prev) =>
+                        isSelected
+                          ? prev.length > 1
+                            ? prev.filter((id) => id !== cat.id)
+                            : prev
+                          : [...prev, cat.id]
+                      )
+                    }
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all ${
+                      isSelected
+                        ? 'bg-[#0B4F3F] text-white border-[#0B4F3F]'
+                        : 'bg-[#FAF8F5] text-[#57534E] border-[#E6E0D6] hover:text-[#141413]'
+                    }`}
+                  >
+                    {lang === 'ar' ? cat.nameAr : cat.nameEn}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -840,16 +928,21 @@ export default function SellerFinanceAndProfile({
             <div className="pt-2 flex justify-end">
               <button
                 type="button"
-                onClick={() =>
-                  showToast(
-                    lang === 'ar'
-                      ? 'تم حفظ إعدادات التشغيل والربط اللوجستي بنجاح'
-                      : 'Operational & SLA Settings Saved Successfully',
-                    undefined,
-                    'success'
-                  )
-                }
-                className="px-6 py-2.5 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold"
+                onClick={async () => {
+                  await updateSellerProfile(seller.id, {
+                    operationalSettings: {
+                      defaultCarrier,
+                      sameDayCutoff,
+                      luxuryPackagingEnabled,
+                      coldChainEnabled,
+                      autoZatcaInvoice,
+                      whatsappOrderAlerts,
+                      lowStockEmailAlerts,
+                      updatedAt: new Date().toISOString(),
+                    },
+                  });
+                }}
+                className="px-6 py-2.5 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] text-white text-xs font-bold shadow-xs"
               >
                 {t('حفظ إعدادات التشغيل', 'Save Operational Settings')}
               </button>

@@ -1161,6 +1161,7 @@ export default function SellerCenter() {
               activeSection === 'profile' ||
               activeSection === 'settings') && (
               <SellerFinanceAndProfile
+                key={activeSeller.id}
                 seller={activeSeller}
                 sellerOrders={sellerOrders}
                 mode={activeSection}

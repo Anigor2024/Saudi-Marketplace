@@ -60,6 +60,15 @@ service cloud.firestore {
       return isSeller() && sellerId is string && currentUserData().sellerId == sellerId;
     }
 
+    // Helper: Verifies that the authenticated Seller owns the referenced Product document
+    function ownsProduct(productId) {
+      return isSeller()
+        && productId is string
+        && isValidId(productId)
+        && exists(/databases/$(database)/documents/products/$(productId))
+        && get(/databases/$(database)/documents/products/$(productId)).data.sellerId == currentUserData().sellerId;
+    }
+
     // Helper for Verified Purchase Review Integrity:
     // Ensures the referenced order exists, belongs to request.auth.uid, has status == 'delivered',
     // AND its immutable `productIds` list explicitly contains the reviewed `productId`.
@@ -92,10 +101,17 @@ service cloud.firestore {
           isAdmin() ||
           (
             ownsSellerAccount(request.resource.data.sellerId)
+            && exists(/databases/$(database)/documents/sellers/$(request.resource.data.sellerId))
+            && request.resource.data.sellerRating == get(/databases/$(database)/documents/sellers/$(request.resource.data.sellerId)).data.rating
+            && request.resource.data.sellerVerified == get(/databases/$(database)/documents/sellers/$(request.resource.data.sellerId)).data.verifiedBadge
             && request.resource.data.rating == 0
             && request.resource.data.reviewCount == 0
             && request.resource.data.soldCount == 0
+            && request.resource.data.isFeatured == false
+            && request.resource.data.isTrending == false
+            && request.resource.data.isBestSeller == false
             && request.resource.data.status in ['active', 'draft', 'out_of_stock']
+            && (!('frequentlyBoughtWith' in request.resource.data) || (request.resource.data.frequentlyBoughtWith is list && request.resource.data.frequentlyBoughtWith.size() <= 10))
           )
         );
 
@@ -195,8 +211,25 @@ service cloud.firestore {
               'ownerName',
               'categories',
               'crNumber',
-              'vatNumber'
+              'vatNumber',
+              'operationalSettings'
             ])
+            && (
+              !('operationalSettings' in request.resource.data)
+              || (
+                request.resource.data.operationalSettings is map
+                && request.resource.data.operationalSettings.keys().hasOnly([
+                  'defaultCarrier',
+                  'sameDayCutoff',
+                  'luxuryPackagingEnabled',
+                  'coldChainEnabled',
+                  'autoZatcaInvoice',
+                  'whatsappOrderAlerts',
+                  'lowStockEmailAlerts',
+                  'updatedAt'
+                ])
+              )
+            )
           )
         );
 
@@ -369,8 +402,8 @@ service cloud.firestore {
         );
 
       allow update: if isValidId(reviewId) && (
-        isAdmin() ||
-        (
+        isAdmin()
+        || (
           isSignedIn()
           && resource.data.userId == request.auth.uid
           && request.resource.data.userId == resource.data.userId
@@ -378,12 +411,30 @@ service cloud.firestore {
           && request.resource.data.verifiedPurchase == resource.data.verifiedPurchase
           && request.resource.data.get('verifiedOrderId', null) == resource.data.get('verifiedOrderId', null)
         )
+        || (
+          ownsProduct(resource.data.productId)
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.productId == resource.data.productId
+          && request.resource.data.rating == resource.data.rating
+          && request.resource.data.comment == resource.data.comment
+          && request.resource.data.title == resource.data.title
+          && request.resource.data.verifiedPurchase == resource.data.verifiedPurchase
+          && request.resource.data.get('verifiedOrderId', null) == resource.data.get('verifiedOrderId', null)
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'sellerReplyAr',
+            'sellerReplyEn',
+            'sellerReplyAt'
+          ])
+          && isValidString(request.resource.data.sellerReplyAr, 2, 1500)
+        )
       );
 
       allow delete: if isValidId(reviewId) && isAdmin();
     }
 
-    // 7. PRODUCT QUESTIONS: Public read; Authenticated user asks question; Seller or Admin answers
+    // 7. PRODUCT QUESTIONS: Public read; Authenticated user asks question;
+    // Seller answers ONLY questions for products owned by their sellerId and modifies ONLY answer fields; Admin manages all.
     match /questions/{questionId} {
       allow read: if true;
 
@@ -392,7 +443,25 @@ service cloud.firestore {
         && isValidString(request.resource.data.productId, 1, 100)
         && isValidString(request.resource.data.questionAr, 2, 800);
 
-      allow update: if isValidId(questionId) && (isAdmin() || isSeller());
+      allow update: if isValidId(questionId) && (
+        isAdmin()
+        || (
+          ownsProduct(resource.data.productId)
+          && request.resource.data.productId == resource.data.productId
+          && request.resource.data.userName == resource.data.userName
+          && request.resource.data.questionAr == resource.data.questionAr
+          && request.resource.data.questionEn == resource.data.questionEn
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'answerAr',
+            'answerEn',
+            'answeredByAr',
+            'answeredByEn',
+            'answeredAt'
+          ])
+          && isValidString(request.resource.data.answerAr, 2, 1500)
+        )
+      );
 
       allow delete: if isValidId(questionId) && isAdmin();
     }
