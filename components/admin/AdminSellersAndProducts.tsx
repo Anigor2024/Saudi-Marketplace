@@ -27,7 +27,13 @@ import {
   X,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
-import { Product, ProductStatus, Seller, SellerStatus } from '@/lib/types';
+import {
+  Product,
+  ProductStatus,
+  Seller,
+  SellerStatus,
+  calculateSellerPayoutReservation,
+} from '@/lib/types';
 import { maskIban } from '@/lib/utils';
 
 interface AdminSellersAndProductsProps {
@@ -668,8 +674,27 @@ export default function AdminSellersAndProducts({
                           </div>
                         </td>
 
-                        <td className="py-4 px-4 text-end font-mono tabular-nums font-bold text-[#141413]">
-                          {formatPrice(seller.availableBalance)}
+                        <td className="py-4 px-4 text-end font-mono tabular-nums">
+                          {(() => {
+                            const res = calculateSellerPayoutReservation(seller, tickets);
+                            return (
+                              <div className="space-y-0.5">
+                                <div className="font-bold text-[#141413]">
+                                  {formatPrice(res.availableBalance)}
+                                </div>
+                                {res.reservedPendingPayoutAmount > 0 && (
+                                  <div className="text-[10px] text-[#B7791F]">
+                                    {t('محجوز:', 'Reserved:')}{' '}
+                                    {formatPrice(res.reservedPendingPayoutAmount)}
+                                  </div>
+                                )}
+                                <div className="text-[10px] text-[#0B4F3F] font-semibold">
+                                  {t('قابل للطلب:', 'Requestable:')}{' '}
+                                  {formatPrice(res.requestableBalance)}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </td>
 
                         <td className="py-4 px-4 text-end">
@@ -817,12 +842,37 @@ export default function AdminSellersAndProducts({
                       {formatPrice(inspectingSeller.netEarnings)}
                     </span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#57534E]">{t('الرصيد المتاح للتحويل:', 'Available Payout Balance:')}</span>
-                    <span className="font-mono font-bold text-[#1B6B45]">
-                      {formatPrice(inspectingSeller.availableBalance)}
-                    </span>
-                  </div>
+                  {(() => {
+                    const res = calculateSellerPayoutReservation(inspectingSeller, tickets);
+                    return (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-[#57534E]">
+                            {t('الرصيد المتاح (Available Balance):', 'Available Balance:')}
+                          </span>
+                          <span className="font-mono font-bold text-[#1B6B45]">
+                            {formatPrice(res.availableBalance)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-[#57534E]">
+                            {t('طلبات التسوية المحجوزة:', 'Reserved Pending Payouts:')}
+                          </span>
+                          <span className="font-mono font-bold text-[#B7791F]">
+                            {formatPrice(res.reservedPendingPayoutAmount)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between pt-1 border-t border-[#E6E0D6]">
+                          <span className="text-[#57534E] font-semibold">
+                            {t('الرصيد القابل للطلب حالياً:', 'Currently Requestable Balance:')}
+                          </span>
+                          <span className="font-mono font-bold text-[#0B4F3F]">
+                            {formatPrice(res.requestableBalance)}
+                          </span>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
 

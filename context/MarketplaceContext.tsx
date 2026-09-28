@@ -35,6 +35,7 @@ import {
   toPublicSellerProfile,
   publicProfileToStorefrontSeller,
   calculateSellerPayoutReservation,
+  getSynchronizedPayoutTicketStatus,
   SellerStatus,
   CartItem,
   Coupon,
@@ -4032,10 +4033,22 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const target = tickets.find((tkt) => tkt.id === ticketId);
       if (!target) return;
 
+      // Prevent payout tickets from entering inconsistent states via generic Support Ticket controls:
+      // For `workflowType === 'payout'`, ticket `status` MUST remain synchronized with `treasuryStatus`:
+      // - `requested` -> `open`
+      // - `under_review` -> `in_progress`
+      // - `approved_for_treasury` -> `in_progress`
+      // - `rejected` / backend-confirmed `completed` -> `resolved`
+      const isPayoutTicket =
+        target.workflowType === 'payout' || Boolean(target.payoutAmount);
+      const effectiveStatus: SupportTicket['status'] = isPayoutTicket
+        ? getSynchronizedPayoutTicketStatus(target.treasuryStatus)
+        : status;
+
       const nowDate = new Date().toISOString().split('T')[0];
       const updated: SupportTicket = {
         ...target,
-        status,
+        status: effectiveStatus,
         ...(replyText.trim()
           ? {
               replyAr: replyText.trim(),
@@ -4064,18 +4077,42 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       setTickets((prev) => prev.map((tkt) => (tkt.id === ticketId ? updated : tkt)));
       await addAuditLog(
-        `معالجة تذكرة الدعم #${target.ticketNumber} وتحديث حالتها إلى (${
-          status === 'resolved' ? 'محلولة' : status === 'in_progress' ? 'قيد المعالجة' : 'مفتوحة'
-        })`,
-        `Updated Support Ticket #${target.ticketNumber} status to ${status}`,
+        isPayoutTicket
+          ? `تسجيل ملاحظة إدارية على تذكرة الخزينة #${target.ticketNumber} (الحالة متزامنة مع ${
+              target.treasuryStatus || 'requested'
+            } -> ${effectiveStatus})`
+          : `معالجة تذكرة الدعم #${target.ticketNumber} وتحديث حالتها إلى (${
+              effectiveStatus === 'resolved'
+                ? 'محلولة'
+                : effectiveStatus === 'in_progress'
+                ? 'قيد المعالجة'
+                : 'مفتوحة'
+            })`,
+        isPayoutTicket
+          ? `Recorded administrative note on payout ticket #${target.ticketNumber} (status synchronized with ${
+              target.treasuryStatus || 'requested'
+            } -> ${effectiveStatus})`
+          : `Updated Support Ticket #${target.ticketNumber} status to ${effectiveStatus}`,
         'ticket',
         ticketId
       );
       showToast(
         lang === 'ar'
-          ? `تم تحديث تذكرة الدعم #${target.ticketNumber}`
+          ? isPayoutTicket
+            ? `تم حفظ الملاحظة الإدارية لتذكرة الخزينة #${target.ticketNumber}`
+            : `تم تحديث تذكرة الدعم #${target.ticketNumber}`
+          : isPayoutTicket
+          ? `Saved Treasury Note for Payout Ticket #${target.ticketNumber}`
           : `Support Ticket #${target.ticketNumber} Updated`,
-        undefined,
+        isPayoutTicket
+          ? lang === 'ar'
+            ? `تظل حالة التذكرة (${effectiveStatus}) متزامنة تلقائياً مع حالة الخزينة (${
+                target.treasuryStatus || 'requested'
+              })`
+            : `Ticket status (${effectiveStatus}) remains synchronized with treasuryStatus (${
+                target.treasuryStatus || 'requested'
+              })`
+          : undefined,
         'success'
       );
     },
@@ -4107,12 +4144,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!targetTicket) return;
 
       const nowDate = new Date().toISOString().split('T')[0];
-      const nextTicketStatus: SupportTicket['status'] =
-        treasuryStatus === 'requested'
-          ? 'open'
-          : treasuryStatus === 'under_review' || treasuryStatus === 'approved_for_treasury'
-          ? 'in_progress'
-          : 'resolved';
+      const nextTicketStatus = getSynchronizedPayoutTicketStatus(treasuryStatus);
 
       const statusLabelAr: Record<NonNullable<SupportTicket['treasuryStatus']>, string> = {
         requested: 'طلب جديد بانتظار المراجعة',

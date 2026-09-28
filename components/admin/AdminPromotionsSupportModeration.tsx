@@ -14,7 +14,12 @@ import {
   X,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
-import { Coupon, SupportTicket } from '@/lib/types';
+import {
+  Coupon,
+  SupportTicket,
+  calculateSellerPayoutReservation,
+  getSynchronizedPayoutTicketStatus,
+} from '@/lib/types';
 import { maskIbanInText } from '@/lib/utils';
 
 interface AdminPromotionsSupportModerationProps {
@@ -698,6 +703,10 @@ export default function AdminPromotionsSupportModeration({
             const relatedSeller = tkt.sellerId
               ? sellers.find((s) => s.id === tkt.sellerId)
               : undefined;
+            const sellerReservation = relatedSeller
+              ? calculateSellerPayoutReservation(relatedSeller, tickets)
+              : null;
+            const synchronizedPayoutStatus = getSynchronizedPayoutTicketStatus(currentTreasury);
 
             return (
               <div
@@ -787,6 +796,35 @@ export default function AdminPromotionsSupportModeration({
                       </div>
                     </div>
 
+                    {sellerReservation && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-[#E6E0D6]/70">
+                        <div className="p-2 rounded-lg bg-white border border-[#E6E0D6]">
+                          <div className="text-[10px] text-[#8C857B]">
+                            {t('الرصيد المتاح للتاجر', 'Seller Available Balance')}
+                          </div>
+                          <div className="font-mono font-bold text-[#141413]">
+                            {formatPrice(sellerReservation.availableBalance)}
+                          </div>
+                        </div>
+                        <div className="p-2 rounded-lg bg-white border border-[#E6E0D6]">
+                          <div className="text-[10px] text-[#8C857B]">
+                            {t('المحجوز قيد المراجعة', 'Reserved Pending Payouts')}
+                          </div>
+                          <div className="font-mono font-bold text-[#B7791F]">
+                            {formatPrice(sellerReservation.reservedPendingPayoutAmount)}
+                          </div>
+                        </div>
+                        <div className="p-2 rounded-lg bg-white border border-[#E6E0D6]">
+                          <div className="text-[10px] text-[#8C857B]">
+                            {t('القابل للطلب حالياً', 'Currently Requestable Balance')}
+                          </div>
+                          <div className="font-mono font-bold text-[#0B4F3F]">
+                            {formatPrice(sellerReservation.requestableBalance)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#E6E0D6]">
                       <span className="text-[11px] text-[#8C857B]">
                         {t(
@@ -872,31 +910,64 @@ export default function AdminPromotionsSupportModeration({
                     className="flex-1 min-w-[240px] px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs text-[#141413]"
                   />
 
-                  <button
-                    type="button"
-                    onClick={() => replyToSupportTicket(tkt.id, replyDraft, 'in_progress')}
-                    className="px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] hover:border-[#0B4F3F] text-xs font-bold text-[#141413] whitespace-nowrap"
-                  >
-                    {t('قيد المعالجة', 'Mark In Progress')}
-                  </button>
+                  {isPayout ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] text-[#57534E] font-mono">
+                        {t(
+                          `الحالة متزامنة مع الخزينة (${currentTreasury} → ${synchronizedPayoutStatus})`,
+                          `Synchronized with Treasury (${currentTreasury} → ${synchronizedPayoutStatus})`
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          replyToSupportTicket(
+                            tkt.id,
+                            replyDraft.trim() ||
+                              t(
+                                'تم توثيق الملاحظة المالية على طلب التسوية في سجل الخزينة.',
+                                'Administrative treasury note recorded on payout settlement ticket.'
+                              ),
+                            synchronizedPayoutStatus
+                          )
+                        }
+                        className="px-4 py-2 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold hover:bg-[#083D30] whitespace-nowrap"
+                      >
+                        {t(
+                          'حفظ ملاحظة الخزينة / الرد الإداري',
+                          'Save Treasury Admin Note / Reply'
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => replyToSupportTicket(tkt.id, replyDraft, 'in_progress')}
+                        className="px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] hover:border-[#0B4F3F] text-xs font-bold text-[#141413] whitespace-nowrap"
+                      >
+                        {t('قيد المعالجة', 'Mark In Progress')}
+                      </button>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      replyToSupportTicket(
-                        tkt.id,
-                        replyDraft.trim() ||
-                          t(
-                            'تمت معالجة طلبكم بنجاح من قِبل فريق العناية التنفيذي في أثيل.',
-                            'Your request has been resolved by Atheel Executive Concierge.'
-                          ),
-                        'resolved'
-                      )
-                    }
-                    className="px-4 py-2 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold hover:bg-[#083D30] whitespace-nowrap"
-                  >
-                    {t('إرسال الرد وإغلاق التذكرة', 'Send Reply & Resolve')}
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          replyToSupportTicket(
+                            tkt.id,
+                            replyDraft.trim() ||
+                              t(
+                                'تمت معالجة طلبكم بنجاح من قِبل فريق العناية التنفيذي في أثيل.',
+                                'Your request has been resolved by Atheel Executive Concierge.'
+                              ),
+                            'resolved'
+                          )
+                        }
+                        className="px-4 py-2 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold hover:bg-[#083D30] whitespace-nowrap"
+                      >
+                        {t('إرسال الرد وإغلاق التذكرة', 'Send Reply & Resolve')}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             );

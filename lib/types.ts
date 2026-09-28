@@ -509,6 +509,24 @@ export function calculateSellerPayoutReservation(
   };
 }
 
+/**
+ * Maps a payout ticket's `treasuryStatus` deterministically to its synchronized `SupportTicket['status']`:
+ * - `requested` -> `open`
+ * - `under_review` -> `in_progress`
+ * - `approved_for_treasury` -> `in_progress`
+ * - `rejected` -> `resolved`
+ * - `completed` -> `resolved` (backend-confirmed only in production)
+ */
+export function getSynchronizedPayoutTicketStatus(
+  treasuryStatus?: SupportTicket['treasuryStatus']
+): SupportTicket['status'] {
+  const state = treasuryStatus || 'requested';
+  if (state === 'requested') return 'open';
+  if (state === 'under_review' || state === 'approved_for_treasury') return 'in_progress';
+  return 'resolved';
+}
+
+
 export interface AuditLogEntry {
   id: string;
   actorName: string;
