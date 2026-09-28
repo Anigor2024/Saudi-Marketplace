@@ -161,6 +161,39 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "actorName", "actionAr", "createdAt"]
+    },
+    "ProductQuestion": {
+      "title": "ProductQuestion",
+      "description": "Customer question and merchant/concierge answer on a product",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "userName": { "type": "string" },
+        "questionAr": { "type": "string" },
+        "questionEn": { "type": "string" },
+        "answerAr": { "type": "string" },
+        "answerEn": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "productId", "userName", "questionAr", "createdAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer support inquiry ticket",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ticketNumber": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "ticketNumber", "userId", "subject", "message", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -194,7 +227,15 @@
     },
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/AuditLog" },
-      "description": "Homepage configuration, campaigns, support tickets, and notifications"
+      "description": "Homepage configuration and global marketplace settings"
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/ProductQuestion" },
+      "description": "Product Q&A items"
+    },
+    "/tickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Customer support tickets"
     }
   }
 }

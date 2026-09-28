@@ -941,6 +941,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerName: 'فيصل بن عبدالعزيز الراجحي',
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
+    sellerIds: ['seller-3', 'seller-1'],
     items: [
       {
         productId: 'prod-1',
@@ -977,8 +978,8 @@ export const INITIAL_ORDERS: Order[] = [
     discountAmount: 450,
     couponCode: 'ATHEEL15',
     shippingFee: 0,
-    vatAmount: 1177.5,
-    total: 9027.5,
+    vatAmount: 1023.91,
+    total: 7850,
     status: 'delivered',
     trackingNumber: 'SPL-882910442SA',
     carrierAr: 'سبل إكسبريس VIP',
@@ -994,6 +995,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerName: 'فيصل بن عبدالعزيز الراجحي',
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
+    sellerIds: ['seller-2'],
     items: [
       {
         productId: 'prod-9',
@@ -1030,8 +1032,8 @@ export const INITIAL_ORDERS: Order[] = [
     discountAmount: 350,
     couponCode: 'AFAQ10',
     shippingFee: 0,
-    vatAmount: 997.2,
-    total: 7645.2,
+    vatAmount: 867.13,
+    total: 6648,
     status: 'out_for_delivery',
     trackingNumber: 'ARMX-99401288SA',
     carrierAr: 'أرامكس بريميوم',
@@ -1047,6 +1049,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerName: 'فيصل بن عبدالعزيز الراجحي',
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
+    sellerIds: ['seller-5'],
     items: [
       {
         productId: 'prod-21',
@@ -1070,8 +1073,8 @@ export const INITIAL_ORDERS: Order[] = [
     discountAmount: 250,
     couponCode: 'VIP250',
     shippingFee: 0,
-    vatAmount: 1236,
-    total: 9476,
+    vatAmount: 1074.78,
+    total: 8240,
     status: 'preparing',
     trackingNumber: 'SMSA-77129940SA',
     carrierAr: 'سمسا إكسبريس',
@@ -1087,6 +1090,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerName: 'سارة بنت خالد العليان',
     customerEmail: 'sara.olayan@example.sa',
     customerPhone: '+966 54 321 7766',
+    sellerIds: ['seller-4', 'seller-6'],
     items: [
       {
         productId: 'prod-29',
@@ -1123,8 +1127,8 @@ export const INITIAL_ORDERS: Order[] = [
     discountAmount: 100,
     couponCode: 'WELCOME100',
     shippingFee: 0,
-    vatAmount: 712.35,
-    total: 5461.35,
+    vatAmount: 619.43,
+    total: 4749,
     status: 'delivered',
     trackingNumber: 'SPL-66120984SA',
     carrierAr: 'سبل إكسبريس VIP',
@@ -1140,6 +1144,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerName: 'فهد بن محمد الدوسري',
     customerEmail: 'fahad.dosari@example.sa',
     customerPhone: '+966 56 889 4411',
+    sellerIds: ['seller-2'],
     items: [
       {
         productId: 'prod-17',
@@ -1163,8 +1168,8 @@ export const INITIAL_ORDERS: Order[] = [
     discountAmount: 500,
     couponCode: 'RIYADH20',
     shippingFee: 0,
-    vatAmount: 2174.85,
-    total: 16673.85,
+    vatAmount: 1891.17,
+    total: 14499,
     status: 'shipped',
     trackingNumber: 'DHL-55201948SA',
     carrierAr: 'دي إتش إل إكسبريس',
@@ -1180,6 +1185,7 @@ export const INITIAL_ORDERS: Order[] = [
     customerName: 'فيصل بن عبدالعزيز الراجحي',
     customerEmail: 'customer@atheel.sa',
     customerPhone: '+966 50 511 9988',
+    sellerIds: ['seller-4'],
     items: [
       {
         productId: 'prod-25',
@@ -1202,8 +1208,8 @@ export const INITIAL_ORDERS: Order[] = [
     subtotal: 3850,
     discountAmount: 0,
     shippingFee: 0,
-    vatAmount: 577.5,
-    total: 4427.5,
+    vatAmount: 502.17,
+    total: 3850,
     status: 'return_requested',
     trackingNumber: 'SPL-33109482SA',
     carrierAr: 'سبل إكسبريس VIP',

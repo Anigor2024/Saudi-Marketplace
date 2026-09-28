@@ -1,6 +1,20 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives & Validation Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function isValidString(val, minLen, maxLen) {
       return val is string && val.size() >= minLen && val.size() <= maxLen;
     }
@@ -9,68 +23,249 @@ service cloud.firestore {
       return val is number && val >= 0;
     }
 
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function userDocExists() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'ensanzodamer@gmail.com' && request.auth.token.email_verified == true) ||
+        (userDocExists() && currentUserData().role == 'admin')
+      );
+    }
+
+    function isSeller() {
+      return isSignedIn() && userDocExists() && currentUserData().role == 'seller';
+    }
+
+    function ownsSellerAccount(sellerId) {
+      return isSeller() && sellerId is string && currentUserData().sellerId == sellerId;
+    }
+
+    // 1. PRODUCTS: Public read for active/out_of_stock; Seller manages own products; Admin moderates all
     match /products/{productId} {
-      allow read: if true;
-      allow create, update: if isValidString(request.resource.data.titleAr, 2, 300)
+      allow read: if resource.data.status == 'active'
+        || resource.data.status == 'out_of_stock'
+        || isAdmin()
+        || (isSeller() && resource.data.sellerId == currentUserData().sellerId);
+
+      allow create: if isValidId(productId)
+        && isValidString(request.resource.data.titleAr, 2, 300)
         && isValidString(request.resource.data.titleEn, 2, 300)
         && isNonNegativeNumber(request.resource.data.price)
-        && isNonNegativeNumber(request.resource.data.stock);
-      allow delete: if true;
+        && isNonNegativeNumber(request.resource.data.stock)
+        && (isAdmin() || ownsSellerAccount(request.resource.data.sellerId));
+
+      allow update: if isValidId(productId)
+        && isValidString(request.resource.data.titleAr, 2, 300)
+        && isValidString(request.resource.data.titleEn, 2, 300)
+        && isNonNegativeNumber(request.resource.data.price)
+        && isNonNegativeNumber(request.resource.data.stock)
+        && (
+          isAdmin() ||
+          (ownsSellerAccount(resource.data.sellerId) && request.resource.data.sellerId == resource.data.sellerId)
+        );
+
+      allow delete: if isValidId(productId) && (isAdmin() || ownsSellerAccount(resource.data.sellerId));
     }
 
+    // 2. SELLERS: Public read; Authenticated customer can submit pending application; Seller updates own safe info; Admin controls approval/status
     match /sellers/{sellerId} {
       allow read: if true;
-      allow create, update: if isValidString(request.resource.data.nameAr, 2, 200)
-        && isValidString(request.resource.data.nameEn, 2, 200);
-      allow delete: if true;
+
+      allow create: if isSignedIn()
+        && isValidId(sellerId)
+        && isValidString(request.resource.data.nameAr, 2, 200)
+        && isValidString(request.resource.data.nameEn, 2, 200)
+        && (
+          isAdmin() ||
+          (request.resource.data.status == 'pending' && request.resource.data.verifiedBadge == false)
+        );
+
+      allow update: if isValidId(sellerId)
+        && isValidString(request.resource.data.nameAr, 2, 200)
+        && isValidString(request.resource.data.nameEn, 2, 200)
+        && (
+          isAdmin() ||
+          (
+            ownsSellerAccount(sellerId)
+            && request.resource.data.status == resource.data.status
+            && request.resource.data.verifiedBadge == resource.data.verifiedBadge
+            && request.resource.data.commissionRate == resource.data.commissionRate
+          )
+        );
+
+      allow delete: if isValidId(sellerId) && isAdmin();
     }
 
+    // 3. USERS: Customer reads/updates own profile but NEVER escalates role or sellerId; Admin manages users; No deletion
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+
+      allow create: if isValidId(userId)
+        && isValidString(request.resource.data.name, 2, 150)
+        && isValidString(request.resource.data.email, 3, 200)
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && request.resource.data.id == request.auth.uid
+            && request.resource.data.role == 'customer'
+            && !('sellerId' in request.resource.data)
+          )
+        );
+
+      allow update: if isValidId(userId)
+        && isValidString(request.resource.data.name, 2, 150)
+        && isValidString(request.resource.data.email, 3, 200)
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && request.resource.data.id == resource.data.id
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.get('sellerId', null) == resource.data.get('sellerId', null)
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // 4. ORDERS: Customer creates/reads own orders; Seller reads/updates fulfillment on orders containing their items; Admin accesses all
     match /orders/{orderId} {
-      allow read: if true;
-      allow create, update: if isValidString(request.resource.data.orderNumber, 3, 60)
-        && isNonNegativeNumber(request.resource.data.total);
-      allow delete: if true;
+      allow create: if isSignedIn()
+        && isValidId(orderId)
+        && request.resource.data.customerId == request.auth.uid
+        && isValidString(request.resource.data.orderNumber, 3, 60)
+        && isNonNegativeNumber(request.resource.data.total)
+        && isNonNegativeNumber(request.resource.data.vatAmount);
+
+      allow read: if isSignedIn() && (
+        resource.data.customerId == request.auth.uid
+        || isAdmin()
+        || (isSeller() && currentUserData().sellerId in resource.data.get('sellerIds', []))
+      );
+
+      allow update: if isSignedIn()
+        && isValidId(orderId)
+        && (
+          isAdmin()
+          || (
+            resource.data.customerId == request.auth.uid
+            && request.resource.data.customerId == resource.data.customerId
+            && request.resource.data.total == resource.data.total
+            && request.resource.data.status in ['cancelled', 'return_requested']
+          )
+          || (
+            isSeller()
+            && currentUserData().sellerId in resource.data.get('sellerIds', [])
+            && request.resource.data.customerId == resource.data.customerId
+            && request.resource.data.total == resource.data.total
+          )
+        );
+
+      allow delete: if false;
     }
 
+    // 5. COUPONS: Public reads active coupons; Seller manages own seller coupons; Admin manages all
     match /coupons/{couponId} {
-      allow read: if true;
-      allow create, update: if isValidString(request.resource.data.code, 2, 40)
-        && isNonNegativeNumber(request.resource.data.value);
-      allow delete: if true;
+      allow read: if resource.data.isActive == true
+        || isAdmin()
+        || (isSeller() && resource.data.sellerId == currentUserData().sellerId);
+
+      allow create: if isValidId(couponId)
+        && isValidString(request.resource.data.code, 2, 40)
+        && isNonNegativeNumber(request.resource.data.value)
+        && (isAdmin() || ownsSellerAccount(request.resource.data.sellerId));
+
+      allow update: if isValidId(couponId)
+        && isValidString(request.resource.data.code, 2, 40)
+        && isNonNegativeNumber(request.resource.data.value)
+        && (
+          isAdmin() ||
+          (ownsSellerAccount(resource.data.sellerId) && request.resource.data.sellerId == resource.data.sellerId)
+        );
+
+      allow delete: if isValidId(couponId) && (isAdmin() || ownsSellerAccount(resource.data.sellerId));
     }
 
+    // 6. REVIEWS: Public read; Authenticated user creates own review; Owner or Admin updates; Admin deletes
     match /reviews/{reviewId} {
       allow read: if true;
-      allow create, update: if isValidString(request.resource.data.productId, 1, 100)
+
+      allow create: if isSignedIn()
+        && isValidId(reviewId)
+        && request.resource.data.userId == request.auth.uid
+        && isValidString(request.resource.data.productId, 1, 100)
         && request.resource.data.rating is number
         && request.resource.data.rating >= 1
-        && request.resource.data.rating <= 5;
-      allow delete: if true;
+        && request.resource.data.rating <= 5
+        && isValidString(request.resource.data.comment, 2, 1500);
+
+      allow update: if isValidId(reviewId) && (
+        isAdmin() ||
+        (
+          isSignedIn()
+          && resource.data.userId == request.auth.uid
+          && request.resource.data.userId == resource.data.userId
+        )
+      );
+
+      allow delete: if isValidId(reviewId) && isAdmin();
     }
 
-    match /users/{userId} {
-      allow read: if true;
-      allow create, update: if isValidString(request.resource.data.email, 3, 200)
-        && request.resource.data.role in ['customer', 'seller', 'admin'];
-      allow delete: if true;
-    }
-
-    match /auditLogs/{logId} {
-      allow read: if true;
-      allow create, update: if isValidString(request.resource.data.actionAr, 2, 500);
-      allow delete: if true;
-    }
-
-    match /settings/{settingId} {
-      allow read, write: if true;
-    }
-
+    // 7. PRODUCT QUESTIONS: Public read; Authenticated user asks question; Seller or Admin answers
     match /questions/{questionId} {
-      allow read, write: if true;
+      allow read: if true;
+
+      allow create: if isSignedIn()
+        && isValidId(questionId)
+        && isValidString(request.resource.data.productId, 1, 100)
+        && isValidString(request.resource.data.questionAr, 2, 800);
+
+      allow update: if isValidId(questionId) && (isAdmin() || isSeller());
+
+      allow delete: if isValidId(questionId) && isAdmin();
     }
 
+    // 8. SUPPORT TICKETS: Authenticated customer creates & reads own tickets; Admin reads & manages all
     match /tickets/{ticketId} {
-      allow read, write: if true;
+      allow create: if isSignedIn()
+        && isValidId(ticketId)
+        && request.resource.data.userId == request.auth.uid
+        && isValidString(request.resource.data.subject, 2, 300)
+        && isValidString(request.resource.data.message, 2, 2000);
+
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow update: if isValidId(ticketId) && isAdmin();
+
+      allow delete: if false;
+    }
+
+    // 9. AUDIT LOGS: Admin-only read and create; Immutable
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+
+      allow create: if isAdmin()
+        && isValidId(logId)
+        && isValidString(request.resource.data.actionAr, 2, 500);
+
+      allow update, delete: if false;
+    }
+
+    // 10. SETTINGS / HOMEPAGE CONFIG: Public read; Admin-only write
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isValidId(settingId) && isAdmin();
     }
   }
 }

@@ -48,6 +48,9 @@ export function NavbarAndMegaMenu() {
     activeView,
     navigateTo,
     currentUser,
+    isAuthLoading,
+    isDemoMode,
+    exitDemoMode,
     loginWithDemoRole,
     logout,
     categories,
@@ -175,16 +178,16 @@ export function NavbarAndMegaMenu() {
           <div className="flex items-center gap-2 sm:gap-3 ms-auto">
             <div className="flex items-center bg-white/10 rounded-lg p-0.5 border border-white/10">
               <span className="hidden xl:inline-block px-2 text-[11px] text-[#C59B27] font-medium">
-                {t('تجربة الأدوار الفورية:', 'Instant Demo Role:')}
+                {t('وضع العرض التجريبي (Demo):', 'Portfolio Demo Mode:')}
               </span>
               {(
                 [
-                  { role: 'customer' as UserRole, labelAr: 'عميل VIP', labelEn: 'Customer' },
-                  { role: 'seller' as UserRole, labelAr: 'مركز التاجر', labelEn: 'Seller Center' },
-                  { role: 'admin' as UserRole, labelAr: 'لوحة الإدارة', labelEn: 'Admin Panel' },
+                  { role: 'customer' as UserRole, labelAr: 'عميل VIP', labelEn: 'Demo Customer' },
+                  { role: 'seller' as UserRole, labelAr: 'مركز التاجر', labelEn: 'Demo Seller' },
+                  { role: 'admin' as UserRole, labelAr: 'لوحة الإدارة', labelEn: 'Demo Admin' },
                 ] as const
               ).map((item) => {
-                const isActiveRole = currentUser?.role === item.role;
+                const isActiveRole = isDemoMode && currentUser?.role === item.role;
                 return (
                   <button
                     key={item.role}
@@ -200,6 +203,16 @@ export function NavbarAndMegaMenu() {
                   </button>
                 );
               })}
+              {isDemoMode && (
+                <button
+                  type="button"
+                  onClick={exitDemoMode}
+                  className="px-2 py-1 rounded-md text-[11px] font-semibold text-amber-300 hover:text-white transition-colors"
+                  title={t('الخروج من وضع العرض التجريبي', 'Exit Demo Mode')}
+                >
+                  × {t('إنهاء', 'Exit')}
+                </button>
+              )}
             </div>
 
             <button
@@ -533,7 +546,11 @@ export function NavbarAndMegaMenu() {
             </button>
 
             {/* User Account / Login Button */}
-            {currentUser ? (
+            {isAuthLoading ? (
+              <div className="px-3.5 py-2.5 rounded-xl bg-white border border-[#E6E0D6] text-xs text-[#8C857B] animate-pulse">
+                {t('جاري التحقق...', 'Checking...')}
+              </div>
+            ) : currentUser ? (
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
@@ -548,13 +565,23 @@ export function NavbarAndMegaMenu() {
                       {currentUser.name}
                     </div>
                     <div className="text-[10px] text-[#0B4F3F] font-medium mt-0.5">
-                      {currentUser.role === 'admin'
+                      {isDemoMode
+                        ? t(`وضع تجريبي (${currentUser.role})`, `Demo (${currentUser.role})`)
+                        : currentUser.role === 'admin'
                         ? t('مسؤول النظام', 'Executive Admin')
                         : currentUser.role === 'seller'
                         ? t('تاجر معتمد', 'Verified Seller')
                         : `${currentUser.loyaltyPoints.toLocaleString()} ${t('نقطة', 'pts')}`}
                     </div>
                   </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="p-2.5 rounded-xl bg-white border border-[#E6E0D6] hover:border-[#9E2A2B] text-[#57534E] hover:text-[#9E2A2B] transition-colors"
+                  title={t('تسجيل الخروج', 'Sign Out')}
+                >
+                  <LogOut className="w-4 h-4" />
                 </button>
               </div>
             ) : (

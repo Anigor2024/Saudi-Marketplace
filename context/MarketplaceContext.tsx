@@ -4,15 +4,22 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import {
   collection,
   doc,
+  getDoc,
   setDoc,
   deleteDoc,
   onSnapshot,
-  writeBatch,
-  getDocs,
   query,
-  limit,
+  where,
 } from 'firebase/firestore';
-import { signInWithPopup, signOut } from 'firebase/auth';
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile,
+  signInWithPopup,
+  signOut,
+} from 'firebase/auth';
 import { db, auth, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
 import {
   Language,
@@ -69,6 +76,8 @@ export type AppView =
   | 'compare'
   | 'account'
   | 'login'
+  | 'register'
+  | 'forgot-password'
   | 'seller-dashboard'
   | 'admin-dashboard'
   | 'help'
@@ -95,17 +104,39 @@ interface MarketplaceContextType {
 
   // Navigation
   activeView: AppView;
-  navigateTo: (view: AppView, params?: { productId?: string; categoryId?: string; query?: string; sellerId?: string }) => void;
+  navigateTo: (
+    view: AppView,
+    params?: { productId?: string; categoryId?: string; query?: string; sellerId?: string }
+  ) => void;
   selectedProductId: string;
   lastCreatedOrder: Order | null;
+  pendingRedirectView: AppView | null;
+  setPendingRedirectView: (view: AppView | null) => void;
 
-  // Auth & Role
+  // Auth, Session & Demo Mode Isolation
   currentUser: UserProfile | null;
+  isAuthLoading: boolean;
+  isDemoMode: boolean;
+  exitDemoMode: () => void;
   loginWithDemoRole: (role: UserRole) => void;
-  loginWithCredentials: (email: string, password: string) => boolean;
+  loginWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  registerWithEmail: (params: {
+    name: string;
+    email: string;
+    phone: string;
+    password: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  sendPasswordReset: (email: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithCredentials: (email: string, password: string) => Promise<boolean>;
   loginWithGoogle: () => Promise<void>;
-  registerAccount: (name: string, email: string, phone: string, role: 'customer' | 'seller') => void;
-  logout: () => void;
+  registerAccount: (
+    name: string,
+    email: string,
+    phone: string,
+    role?: 'customer' | 'seller',
+    password?: string
+  ) => Promise<void>;
+  logout: () => Promise<void>;
 
   // Data Collections
   categories: Category[];
@@ -148,7 +179,7 @@ interface MarketplaceContextType {
   addRecentSearch: (q: string) => void;
   resetFilters: () => void;
 
-  // Cart & Coupon
+  // Cart & Coupon (VAT-Inclusive 15% Pricing)
   cart: CartItem[];
   addToCart: (product: Product, selectedVariants?: Record<string, string>, quantity?: number) => void;
   updateCartQuantity: (cartItemId: string, quantity: number) => void;
@@ -158,11 +189,12 @@ interface MarketplaceContextType {
   applyCouponCode: (code: string) => { success: boolean; message: string };
   removeCoupon: () => void;
   cartSummary: {
-    subtotal: number;
+    subtotal: number; // VAT-inclusive
     discountAmount: number;
-    shippingFee: number;
-    vatAmount: number; // 15% Saudi VAT
-    total: number;
+    netAfterDiscount: number;
+    shippingFee: number; // VAT-inclusive
+    vatAmount: number; // Included 15% Saudi VAT = total * 15 / 115
+    total: number; // Final VAT-inclusive payable total (no double VAT)
     itemCount: number;
     pointsEarned: number;
   };
@@ -183,14 +215,24 @@ interface MarketplaceContextType {
     paymentMethod: PaymentMethodType;
   }) => Promise<Order | null>;
   cancelOrder: (orderId: string, reason: string) => Promise<void>;
-  requestReturn: (orderId: string, reasonAr: string, details: string, refundMethod: 'wallet' | 'original_payment') => Promise<void>;
-  saveAddress: (address: SaudiAddress) => Promise<void>;
+  requestReturn: (
+    orderId: string,
+    reasonAr: string,
+    details: string,
+    refundMethod: 'wallet' | 'original_payment'
+  ) => Promise<void>;
+  saveAddress: (address: SaudiAddress) => Promise<boolean>;
   deleteAddress: (addressId: string) => Promise<void>;
   setDefaultAddress: (addressId: string) => Promise<void>;
   updateUserProfile: (updates: Partial<UserProfile>) => Promise<void>;
   submitReview: (productId: string, rating: number, title: string, comment: string) => Promise<void>;
   submitQuestion: (productId: string, questionText: string) => Promise<void>;
-  submitSupportTicket: (subject: string, categoryAr: string, message: string, orderNumber?: string) => Promise<void>;
+  submitSupportTicket: (
+    subject: string,
+    categoryAr: string,
+    message: string,
+    orderNumber?: string
+  ) => Promise<void>;
   markAllNotificationsRead: () => void;
 
   // Seller Actions
@@ -206,7 +248,12 @@ interface MarketplaceContextType {
 
   // Admin Actions
   updateSellerStatus: (sellerId: string, status: SellerStatus) => Promise<void>;
-  moderateProduct: (productId: string, updates: Partial<Product>, logReasonAr: string, logReasonEn: string) => Promise<void>;
+  moderateProduct: (
+    productId: string,
+    updates: Partial<Product>,
+    logReasonAr: string,
+    logReasonEn: string
+  ) => Promise<void>;
   processReturnRequest: (orderId: string, approve: boolean, adminNote: string) => Promise<void>;
   updateHomepageConfig: (config: HomepageConfig) => Promise<void>;
   answerProductQuestion: (questionId: string, answerText: string) => Promise<void>;
@@ -219,14 +266,60 @@ interface MarketplaceContextType {
 
 const MarketplaceContext = createContext<MarketplaceContextType | undefined>(undefined);
 
+function logFirestoreFailure(err: unknown, op: OperationType, path: string) {
+  try {
+    handleFirestoreError(err, op, path);
+  } catch {
+    // Structured error was logged and thrown by handleFirestoreError; caught here so caller can display UI feedback cleanly
+  }
+}
+
+function mapFirebaseAuthError(error: unknown, lang: Language): string {
+  const code = (error as { code?: string })?.code || '';
+  if (
+    code === 'auth/invalid-credential' ||
+    code === 'auth/wrong-password' ||
+    code === 'auth/user-not-found'
+  ) {
+    return lang === 'ar'
+      ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. يرجى التحقق والمحاولة مرة أخرى.'
+      : 'Invalid email or password. Please check your credentials and try again.';
+  }
+  if (code === 'auth/email-already-in-use') {
+    return lang === 'ar'
+      ? 'هذا البريد الإلكتروني مسجل مسبقاً. يرجى تسجيل الدخول أو استعادة كلمة المرور.'
+      : 'This email address is already registered. Please sign in or reset your password.';
+  }
+  if (code === 'auth/weak-password') {
+    return lang === 'ar'
+      ? 'كلمة المرور ضعيفة جداً. يجب أن تتكون من ٦ أحرف أو أرقام على الأقل.'
+      : 'Password is too weak. It must be at least 6 characters long.';
+  }
+  if (code === 'auth/invalid-email') {
+    return lang === 'ar'
+      ? 'صيغة البريد الإلكتروني غير صحيحة.'
+      : 'Invalid email address format.';
+  }
+  if (code === 'auth/too-many-requests') {
+    return lang === 'ar'
+      ? 'تم تجاوز عدد المحاولات المسموح بها. يرجى الانتظار قليلاً أو إعادة تعيين كلمة المرور.'
+      : 'Too many failed attempts. Please wait a moment or reset your password.';
+  }
+  if (code === 'auth/operation-not-allowed') {
+    return lang === 'ar'
+      ? 'مزود الدخول عبر البريد وكلمة المرور غير مفعّل في إعدادات Firebase Console لهذا المشروع بعد.'
+      : 'Email/Password sign-in provider is not enabled in Firebase Console for this project.';
+  }
+  return lang === 'ar'
+    ? 'تعذر إتمام عملية المصادقة حالياً. يرجى المحاولة مرة أخرى.'
+    : 'Authentication request failed. Please try again.';
+}
+
 export function MarketplaceProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLang] = useState<Language>('ar');
   const isRtl = lang === 'ar';
 
-  const t = useCallback(
-    (ar: string, en: string) => (lang === 'ar' ? ar : en),
-    [lang]
-  );
+  const t = useCallback((ar: string, en: string) => (lang === 'ar' ? ar : en), [lang]);
 
   const formatPrice = useCallback(
     (amount: number) => {
@@ -251,25 +344,29 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [activeView, setActiveView] = useState<AppView>('home');
   const [selectedProductId, setSelectedProductId] = useState<string>('prod-1');
   const [lastCreatedOrder, setLastCreatedOrder] = useState<Order | null>(null);
+  const [pendingRedirectView, setPendingRedirectView] = useState<AppView | null>(null);
 
-  // Collections State (Initialized with rich seed data for instant zero-flicker render, then synced live with Firestore)
+  // Collections State
   const [categories] = useState<Category[]>(INITIAL_CATEGORIES);
   const [brands] = useState<Brand[]>(INITIAL_BRANDS);
   const [products, setProducts] = useState<Product[]>(INITIAL_ALL_PRODUCTS);
   const [sellers, setSellers] = useState<Seller[]>(INITIAL_SELLERS);
   const [coupons, setCoupons] = useState<Coupon[]>(INITIAL_COUPONS);
-  const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [reviews, setReviews] = useState<Review[]>(INITIAL_REVIEWS);
   const [questions, setQuestions] = useState<ProductQuestion[]>(INITIAL_QUESTIONS);
   const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
   const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [homepageConfig, setHomepageConfig] = useState<HomepageConfig>(INITIAL_HOMEPAGE_CONFIG);
-  const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
-  // Current Logged-In User (Default to Customer Demo Account so evaluator can immediately browse or switch roles)
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(INITIAL_USERS[0]);
+  // Auth & Demo Mode State
+  // Visitors start unauthenticated (null) and can browse publicly
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -281,7 +378,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [minRating, setMinRating] = useState<number>(0);
   const [onlyInStock, setOnlyInStock] = useState<boolean>(false);
   const [onlyDiscounted, setOnlyDiscounted] = useState<boolean>(false);
-  const [sortBy, setSortBy] = useState<'featured' | 'price_asc' | 'price_desc' | 'rating' | 'newest' | 'best_selling'>('featured');
+  const [sortBy, setSortBy] = useState<
+    'featured' | 'price_asc' | 'price_desc' | 'rating' | 'newest' | 'best_selling'
+  >('featured');
   const [recentSearches, setRecentSearches] = useState<string[]>([
     'دهن عود كمبودي',
     'آيفون ١٦ برو ماكس',
@@ -310,163 +409,263 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     },
   ]);
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(INITIAL_COUPONS[0]);
-  const [wishlistIds, setWishlistIds] = useState<string[]>(['prod-1', 'prod-5', 'prod-9', 'prod-21', 'prod-29']);
+  const [wishlistIds, setWishlistIds] = useState<string[]>([
+    'prod-1',
+    'prod-5',
+    'prod-9',
+    'prod-21',
+    'prod-29',
+  ]);
   const [compareIds, setCompareIds] = useState<string[]>(['prod-1', 'prod-4', 'prod-9']);
-  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>(['prod-1', 'prod-5', 'prod-9', 'prod-21', 'prod-29', 'prod-33']);
+  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>([
+    'prod-1',
+    'prod-5',
+    'prod-9',
+    'prod-21',
+    'prod-29',
+    'prod-33',
+  ]);
 
   // Toasts
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  const showToast = useCallback((title: string, description?: string, type: 'success' | 'error' | 'info' = 'success') => {
-    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev, { id, title, description, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((item) => item.id !== id));
-    }, 4200);
-  }, []);
+  const showToast = useCallback(
+    (title: string, description?: string, type: 'success' | 'error' | 'info' = 'success') => {
+      const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      setToasts((prev) => [...prev, { id, title, description, type }]);
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((item) => item.id !== id));
+      }, 4200);
+    },
+    []
+  );
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  // Firestore Seeding & Real-Time Listeners
+  // Build default customer profile for newly authenticated Firebase users
+  const buildDefaultCustomerProfile = useCallback(
+    (uid: string, name: string, email: string, phone: string = '+966 50 000 0000'): UserProfile => {
+      return {
+        id: uid,
+        name: name.trim() || 'عميل أثيل',
+        email: email.trim().toLowerCase(),
+        phone: phone.trim() || '+966 50 000 0000',
+        role: 'customer',
+        walletBalance: 250,
+        loyaltyPoints: 1000,
+        loyaltyTier: 'Silver',
+        referralCode: `ATH-${uid.slice(0, 5).toUpperCase()}`,
+        wishlist: ['prod-1', 'prod-5'],
+        addresses: [
+          {
+            ...INITIAL_USERS[0].addresses[0],
+            id: `addr-${uid.slice(0, 6)}`,
+            recipientName: name.trim() || 'عميل أثيل',
+            phone: phone.trim() || '+966 50 000 0000',
+          },
+        ],
+        loyaltyHistory: [
+          {
+            id: `lh-welcome-${uid.slice(0, 6)}`,
+            titleAr: 'مكافأة الترحيب بالعضوية الجديدة في أثيل',
+            titleEn: 'Atheel New Member Welcome Privilege',
+            points: 1000,
+            date: new Date().toISOString().split('T')[0],
+          },
+        ],
+        preferences: {
+          newsletter: true,
+          smsAlerts: true,
+          whatsappUpdates: true,
+          language: lang,
+        },
+        createdAt: new Date().toISOString().split('T')[0],
+      };
+    },
+    [lang]
+  );
+
+  // 1. Firebase Auth State Listener (Persistent Session)
   useEffect(() => {
-    let unsubProducts: (() => void) | undefined;
-    let unsubSellers: (() => void) | undefined;
-    let unsubOrders: (() => void) | undefined;
-    let unsubCoupons: (() => void) | undefined;
-    let unsubReviews: (() => void) | undefined;
-    let unsubLogs: (() => void) | undefined;
-
-    async function initFirestore() {
-      try {
-        const prodCheck = await getDocs(query(collection(db, 'products'), limit(1)));
-        if (prodCheck.empty) {
-          // Seed initial data into Firestore in clean batches
-          const batch1 = writeBatch(db);
-          INITIAL_ALL_PRODUCTS.slice(0, 32).forEach((p) => {
-            batch1.set(doc(db, 'products', p.id), p);
-          });
-          await batch1.commit();
-
-          const batch2 = writeBatch(db);
-          INITIAL_ALL_PRODUCTS.slice(32).forEach((p) => {
-            batch2.set(doc(db, 'products', p.id), p);
-          });
-          INITIAL_SELLERS.forEach((s) => {
-            batch2.set(doc(db, 'sellers', s.id), s);
-          });
-          INITIAL_COUPONS.forEach((c) => {
-            batch2.set(doc(db, 'coupons', c.id), c);
-          });
-          await batch2.commit();
-
-          const batch3 = writeBatch(db);
-          INITIAL_ORDERS.forEach((o) => {
-            batch3.set(doc(db, 'orders', o.id), o);
-          });
-          INITIAL_REVIEWS.forEach((r) => {
-            batch3.set(doc(db, 'reviews', r.id), r);
-          });
-          INITIAL_USERS.forEach((u) => {
-            batch3.set(doc(db, 'users', u.id), u);
-          });
-          INITIAL_AUDIT_LOGS.forEach((l) => {
-            batch3.set(doc(db, 'auditLogs', l.id), l);
-          });
-          batch3.set(doc(db, 'settings', 'homepage'), INITIAL_HOMEPAGE_CONFIG);
-          await batch3.commit();
+    const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        setIsDemoMode(false);
+        try {
+          const userRef = doc(db, 'users', fbUser.uid);
+          const snap = await getDoc(userRef);
+          if (snap.exists()) {
+            const data = snap.data() as UserProfile;
+            setCurrentUser({ ...data, id: fbUser.uid });
+          } else {
+            const newProfile = buildDefaultCustomerProfile(
+              fbUser.uid,
+              fbUser.displayName || fbUser.email?.split('@')[0] || 'عميل أثيل',
+              fbUser.email || 'customer@atheel.sa'
+            );
+            await setDoc(userRef, newProfile);
+            setCurrentUser(newProfile);
+          }
+        } catch (err) {
+          logFirestoreFailure(err, OperationType.GET, `users/${fbUser.uid}`);
+          const fallbackProfile = buildDefaultCustomerProfile(
+            fbUser.uid,
+            fbUser.displayName || 'عميل أثيل',
+            fbUser.email || 'customer@atheel.sa'
+          );
+          setCurrentUser(fallbackProfile);
         }
+      } else {
+        setCurrentUser((prev) => {
+          // Preserve in-memory user only if Demo Mode was explicitly activated
+          return isDemoMode ? prev : null;
+        });
+      }
+      setIsAuthLoading(false);
+    });
 
-        // Subscribe to real-time updates
-        unsubProducts = onSnapshot(
-          collection(db, 'products'),
-          (snap) => {
-            if (!snap.empty) {
-              const list = snap.docs.map((d) => d.data() as Product);
-              // Sort by numeric id so catalog order stays consistent
-              list.sort((a, b) => {
-                const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
-                const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
-                return numA - numB;
-              });
-              setProducts(list);
-            }
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'products')
-        );
+    return () => unsubAuth();
+  }, [buildDefaultCustomerProfile, isDemoMode]);
 
-        unsubSellers = onSnapshot(
-          collection(db, 'sellers'),
-          (snap) => {
-            if (!snap.empty) {
-              setSellers(snap.docs.map((d) => d.data() as Seller));
-            }
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'sellers')
-        );
-
-        unsubOrders = onSnapshot(
-          collection(db, 'orders'),
-          (snap) => {
-            if (!snap.empty) {
-              const list = snap.docs.map((d) => d.data() as Order);
-              list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-              setOrders(list);
-            }
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'orders')
-        );
-
-        unsubCoupons = onSnapshot(
-          collection(db, 'coupons'),
-          (snap) => {
-            if (!snap.empty) {
-              setCoupons(snap.docs.map((d) => d.data() as Coupon));
-            }
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'coupons')
-        );
-
-        unsubReviews = onSnapshot(
-          collection(db, 'reviews'),
-          (snap) => {
-            if (!snap.empty) {
-              setReviews(snap.docs.map((d) => d.data() as Review));
-            }
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'reviews')
-        );
-
-        unsubLogs = onSnapshot(
-          collection(db, 'auditLogs'),
-          (snap) => {
-            if (!snap.empty) {
-              const list = snap.docs.map((d) => d.data() as AuditLogEntry);
-              list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-              setAuditLogs(list);
-            }
-          },
-          (err) => handleFirestoreError(err, OperationType.LIST, 'auditLogs')
-        );
-      } catch (err) {
-        handleFirestoreError(err, OperationType.GET, 'initFirestore');
-      } finally {
+  // 2. Public Firestore Listeners (Safe for all visitors)
+  useEffect(() => {
+    const unsubProducts = onSnapshot(
+      query(collection(db, 'products'), where('status', 'in', ['active', 'out_of_stock'])),
+      (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map((d) => d.data() as Product);
+          list.sort((a, b) => {
+            const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
+            const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
+            return numA - numB;
+          });
+          setProducts(list);
+        }
+        setIsLoadingData(false);
+      },
+      (err) => {
+        logFirestoreFailure(err, OperationType.LIST, 'products');
         setIsLoadingData(false);
       }
-    }
+    );
 
-    initFirestore();
+    const unsubSellers = onSnapshot(
+      collection(db, 'sellers'),
+      (snap) => {
+        if (!snap.empty) {
+          setSellers(snap.docs.map((d) => d.data() as Seller));
+        }
+      },
+      (err) => logFirestoreFailure(err, OperationType.LIST, 'sellers')
+    );
+
+    const unsubCoupons = onSnapshot(
+      query(collection(db, 'coupons'), where('isActive', '==', true)),
+      (snap) => {
+        if (!snap.empty) {
+          setCoupons(snap.docs.map((d) => d.data() as Coupon));
+        }
+      },
+      (err) => logFirestoreFailure(err, OperationType.LIST, 'coupons')
+    );
+
+    const unsubReviews = onSnapshot(
+      collection(db, 'reviews'),
+      (snap) => {
+        if (!snap.empty) {
+          setReviews(snap.docs.map((d) => d.data() as Review));
+        }
+      },
+      (err) => logFirestoreFailure(err, OperationType.LIST, 'reviews')
+    );
+
+    const unsubQuestions = onSnapshot(
+      collection(db, 'questions'),
+      (snap) => {
+        if (!snap.empty) {
+          setQuestions(snap.docs.map((d) => d.data() as ProductQuestion));
+        }
+      },
+      (err) => logFirestoreFailure(err, OperationType.LIST, 'questions')
+    );
+
+    const unsubHomepage = onSnapshot(
+      doc(db, 'settings', 'homepage'),
+      (snap) => {
+        if (snap.exists()) {
+          setHomepageConfig(snap.data() as HomepageConfig);
+        }
+      },
+      (err) => logFirestoreFailure(err, OperationType.GET, 'settings/homepage')
+    );
 
     return () => {
-      unsubProducts?.();
-      unsubSellers?.();
-      unsubOrders?.();
-      unsubCoupons?.();
-      unsubReviews?.();
-      unsubLogs?.();
+      unsubProducts();
+      unsubSellers();
+      unsubCoupons();
+      unsubReviews();
+      unsubQuestions();
+      unsubHomepage();
     };
   }, []);
+
+  // 3. Authenticated / Role-Scoped Listeners (Orders & Audit Logs)
+  useEffect(() => {
+    if (isDemoMode || !currentUser || !auth.currentUser) {
+      return;
+    }
+
+    let unsubOrders: (() => void) | undefined;
+    let unsubLogs: (() => void) | undefined;
+
+    if (currentUser.role === 'admin') {
+      unsubOrders = onSnapshot(
+        collection(db, 'orders'),
+        (snap) => {
+          const list = snap.docs.map((d) => d.data() as Order);
+          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setOrders(list);
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
+      );
+
+      unsubLogs = onSnapshot(
+        collection(db, 'auditLogs'),
+        (snap) => {
+          const list = snap.docs.map((d) => d.data() as AuditLogEntry);
+          list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          setAuditLogs(list);
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'auditLogs')
+      );
+    } else if (currentUser.role === 'seller' && currentUser.sellerId) {
+      unsubOrders = onSnapshot(
+        query(collection(db, 'orders'), where('sellerIds', 'array-contains', currentUser.sellerId)),
+        (snap) => {
+          const list = snap.docs.map((d) => d.data() as Order);
+          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setOrders(list);
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
+      );
+    } else {
+      unsubOrders = onSnapshot(
+        query(collection(db, 'orders'), where('customerId', '==', auth.currentUser.uid)),
+        (snap) => {
+          const list = snap.docs.map((d) => d.data() as Order);
+          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setOrders(list);
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
+      );
+    }
+
+    return () => {
+      unsubOrders?.();
+      unsubLogs?.();
+    };
+  }, [currentUser, isDemoMode]);
 
   const recordProductView = useCallback((productId: string) => {
     setRecentlyViewedIds((prev) => {
@@ -494,163 +693,333 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (params?.sellerId !== undefined) {
         setSelectedSellerId(params.sellerId);
       }
+
+      // Require authentication for protected customer routes (checkout, orders, account)
+      const protectedCustomerViews: AppView[] = ['checkout', 'orders', 'account'];
+      if (protectedCustomerViews.includes(view) && !currentUser) {
+        setPendingRedirectView(view);
+        setActiveView('login');
+        if (typeof window !== 'undefined') {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        return;
+      }
+
       setActiveView(view);
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
-    [recordProductView]
+    [recordProductView, currentUser]
   );
 
-  // Auth Actions
+  // ============================================================================
+  // DEMO MODE (Explicitly isolated in-memory session for Portfolio Evaluators)
+  // ============================================================================
   const loginWithDemoRole = useCallback(
     (role: UserRole) => {
       const targetUser =
         role === 'admin'
-          ? users.find((u) => u.role === 'admin') || INITIAL_USERS[2]
+          ? INITIAL_USERS[2]
           : role === 'seller'
-          ? users.find((u) => u.role === 'seller') || INITIAL_USERS[1]
-          : users.find((u) => u.role === 'customer') || INITIAL_USERS[0];
+          ? INITIAL_USERS[1]
+          : INITIAL_USERS[0];
 
-      setCurrentUser(targetUser);
+      setIsDemoMode(true);
+      setCurrentUser({ ...targetUser });
+      setOrders(INITIAL_ORDERS);
+      setAuditLogs(INITIAL_AUDIT_LOGS);
+
       showToast(
-        lang === 'ar' ? `مرحباً بك، ${targetUser.name}` : `Welcome back, ${targetUser.name}`,
         lang === 'ar'
-          ? `تم تسجيل الدخول بنجاح بصلاحية (${role === 'admin' ? 'الإدارة التنفيذية' : role === 'seller' ? 'مركز التجار' : 'عميل VIP'})`
-          : `Signed in with ${role.toUpperCase()} privileges`,
-        'success'
+          ? `وضع العرض التجريبي: ${targetUser.name}`
+          : `Demo Mode Active: ${targetUser.name}`,
+        lang === 'ar'
+          ? `معاينة واجهة (${
+              role === 'admin'
+                ? 'الإدارة التنفيذية'
+                : role === 'seller'
+                ? 'مركز التجار'
+                : 'عميل VIP'
+            }) في الذاكرة المحلية بأمان دون المساس بقاعدة البيانات الحقيقية`
+          : `Exploring ${role.toUpperCase()} interface in isolated local Demo Mode`,
+        'info'
       );
 
-      if (role === 'admin') {
-        navigateTo('admin-dashboard');
+      if (pendingRedirectView) {
+        const dest = pendingRedirectView;
+        setPendingRedirectView(null);
+        setActiveView(dest);
+      } else if (role === 'admin') {
+        setActiveView('admin-dashboard');
       } else if (role === 'seller') {
-        navigateTo('seller-dashboard');
+        setActiveView('seller-dashboard');
       } else {
-        navigateTo('home');
+        setActiveView('home');
       }
     },
-    [users, lang, showToast, navigateTo]
+    [lang, showToast, pendingRedirectView]
+  );
+
+  const exitDemoMode = useCallback(() => {
+    setIsDemoMode(false);
+    setCurrentUser(null);
+    setOrders([]);
+    setAuditLogs([]);
+    showToast(
+      lang === 'ar' ? 'تم إغلاق وضع العرض التجريبي' : 'Exited Demo Mode',
+      lang === 'ar'
+        ? 'يمكنك الآن التصفح كزائر أو تسجيل الدخول بحساب فعلي'
+        : 'You can now browse publicly or sign in with a real account',
+      'info'
+    );
+    setActiveView('home');
+  }, [lang, showToast]);
+
+  // ============================================================================
+  // REAL FIREBASE AUTHENTICATION FLOWS
+  // ============================================================================
+  const loginWithEmail = useCallback(
+    async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanEmail || !password) {
+        const msg =
+          lang === 'ar'
+            ? 'يرجى إدخال البريد الإلكتروني وكلمة المرور'
+            : 'Please enter both email and password';
+        showToast(msg, undefined, 'error');
+        return { success: false, error: msg };
+      }
+
+      try {
+        const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+        const fbUser = cred.user;
+        setIsDemoMode(false);
+
+        const userRef = doc(db, 'users', fbUser.uid);
+        const snap = await getDoc(userRef);
+        let profile: UserProfile;
+
+        if (snap.exists()) {
+          profile = { ...(snap.data() as UserProfile), id: fbUser.uid };
+        } else {
+          profile = buildDefaultCustomerProfile(
+            fbUser.uid,
+            fbUser.displayName || cleanEmail.split('@')[0],
+            cleanEmail
+          );
+          await setDoc(userRef, profile);
+        }
+
+        setCurrentUser(profile);
+        showToast(
+          lang === 'ar' ? `أهلاً بعودتك، ${profile.name}` : `Welcome back, ${profile.name}`,
+          lang === 'ar' ? 'تم تسجيل الدخول بنجاح' : 'Signed in successfully',
+          'success'
+        );
+
+        const nextView =
+          pendingRedirectView ||
+          (profile.role === 'admin'
+            ? 'admin-dashboard'
+            : profile.role === 'seller'
+            ? 'seller-dashboard'
+            : 'home');
+        setPendingRedirectView(null);
+        setActiveView(nextView);
+        return { success: true };
+      } catch (err) {
+        const msg = mapFirebaseAuthError(err, lang);
+        showToast(lang === 'ar' ? 'فشل تسجيل الدخول' : 'Sign In Failed', msg, 'error');
+        return { success: false, error: msg };
+      }
+    },
+    [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView]
+  );
+
+  const registerWithEmail = useCallback(
+    async ({
+      name,
+      email,
+      phone,
+      password,
+    }: {
+      name: string;
+      email: string;
+      phone: string;
+      password: string;
+    }): Promise<{ success: boolean; error?: string }> => {
+      const cleanName = name.trim();
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanPhone = phone.trim();
+
+      if (!cleanName || !cleanEmail || !password) {
+        const msg =
+          lang === 'ar'
+            ? 'يرجى تعبئة جميع الحقول المطلوبة'
+            : 'Please complete all required fields';
+        showToast(msg, undefined, 'error');
+        return { success: false, error: msg };
+      }
+
+      if (password.length < 6) {
+        const msg =
+          lang === 'ar'
+            ? 'يجب أن تتكون كلمة المرور من ٦ أحرف على الأقل'
+            : 'Password must be at least 6 characters long';
+        showToast(msg, undefined, 'error');
+        return { success: false, error: msg };
+      }
+
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        const fbUser = cred.user;
+        await updateProfile(fbUser, { displayName: cleanName });
+
+        setIsDemoMode(false);
+        // Security invariant: new registrations ALWAYS get role = 'customer'
+        const newProfile = buildDefaultCustomerProfile(
+          fbUser.uid,
+          cleanName,
+          cleanEmail,
+          cleanPhone || '+966 50 000 0000'
+        );
+
+        await setDoc(doc(db, 'users', fbUser.uid), newProfile);
+        setCurrentUser(newProfile);
+
+        showToast(
+          lang === 'ar' ? `مرحباً بك في أثيل، ${cleanName}` : `Welcome to Atheel, ${cleanName}`,
+          lang === 'ar'
+            ? 'تم إنشاء حسابك بنجاح وإضافة ١,٠٠٠ نقطة ولاء ترحيبية'
+            : 'Your customer account has been created with 1,000 welcome loyalty points',
+          'success'
+        );
+
+        const nextView = pendingRedirectView || 'home';
+        setPendingRedirectView(null);
+        setActiveView(nextView);
+        return { success: true };
+      } catch (err) {
+        const msg = mapFirebaseAuthError(err, lang);
+        showToast(lang === 'ar' ? 'تعذر إنشاء الحساب' : 'Registration Failed', msg, 'error');
+        return { success: false, error: msg };
+      }
+    },
+    [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView]
+  );
+
+  const sendPasswordReset = useCallback(
+    async (email: string): Promise<{ success: boolean; error?: string }> => {
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanEmail) {
+        const msg =
+          lang === 'ar'
+            ? 'يرجى إدخال البريد الإلكتروني المسجل'
+            : 'Please enter your registered email address';
+        showToast(msg, undefined, 'error');
+        return { success: false, error: msg };
+      }
+      try {
+        await sendPasswordResetEmail(auth, cleanEmail);
+        showToast(
+          lang === 'ar' ? 'تم إرسال رابط استعادة كلمة المرور' : 'Password Reset Email Sent',
+          lang === 'ar'
+            ? `يرجى التحقق من بريدك الإلكتروني (${cleanEmail}) لإعادة تعيين كلمة المرور`
+            : `Check your inbox (${cleanEmail}) for the password reset link`,
+          'success'
+        );
+        return { success: true };
+      } catch (err) {
+        const msg = mapFirebaseAuthError(err, lang);
+        showToast(lang === 'ar' ? 'تعذر إرسال الرابط' : 'Reset Request Failed', msg, 'error');
+        return { success: false, error: msg };
+      }
+    },
+    [lang, showToast]
   );
 
   const loginWithCredentials = useCallback(
-    (email: string, _password: string): boolean => {
-      const normalized = email.trim().toLowerCase();
-      const matched = users.find((u) => u.email.toLowerCase() === normalized);
-      if (matched) {
-        setCurrentUser(matched);
-        showToast(
-          lang === 'ar' ? `أهلاً بعودتك، ${matched.name}` : `Welcome back, ${matched.name}`,
-          lang === 'ar' ? 'تم تسجيل الدخول بنجاح' : 'Successfully signed in',
-          'success'
-        );
-        if (matched.role === 'admin') navigateTo('admin-dashboard');
-        else if (matched.role === 'seller') navigateTo('seller-dashboard');
-        else navigateTo('home');
-        return true;
-      }
-      showToast(
-        lang === 'ar' ? 'بيانات الدخول غير صحيحة' : 'Invalid Credentials',
-        lang === 'ar' ? 'يرجى التأكد من البريد الإلكتروني أو استخدام حسابات التجربة السريعة.' : 'Please verify your email or use Demo Quick Access.',
-        'error'
-      );
-      return false;
+    async (email: string, password: string): Promise<boolean> => {
+      const res = await loginWithEmail(email, password);
+      return res.success;
     },
-    [users, lang, showToast, navigateTo]
+    [loginWithEmail]
   );
 
   const loginWithGoogle = useCallback(async () => {
     try {
       const res = await signInWithPopup(auth, googleProvider);
       const fbUser = res.user;
-      const newProfile: UserProfile = {
-        id: fbUser.uid,
-        name: fbUser.displayName || 'عميل أثيل المميز',
-        email: fbUser.email || 'vip@atheel.sa',
-        phone: '+966 50 000 0000',
-        role: 'customer',
-        walletBalance: 500,
-        loyaltyPoints: 1500,
-        loyaltyTier: 'Gold',
-        referralCode: `ATH-${fbUser.uid.slice(0, 5).toUpperCase()}`,
-        wishlist: ['prod-1', 'prod-5'],
-        addresses: INITIAL_USERS[0].addresses,
-        loyaltyHistory: INITIAL_USERS[0].loyaltyHistory,
-        preferences: { newsletter: true, smsAlerts: true, whatsappUpdates: true, language: lang },
-        createdAt: new Date().toISOString().split('T')[0],
-      };
-      setCurrentUser(newProfile);
-      await setDoc(doc(db, 'users', newProfile.id), newProfile);
+      setIsDemoMode(false);
+
+      const userRef = doc(db, 'users', fbUser.uid);
+      const snap = await getDoc(userRef);
+      let profile: UserProfile;
+
+      if (snap.exists()) {
+        profile = { ...(snap.data() as UserProfile), id: fbUser.uid };
+      } else {
+        profile = buildDefaultCustomerProfile(
+          fbUser.uid,
+          fbUser.displayName || 'عميل أثيل المميز',
+          fbUser.email || 'vip@atheel.sa'
+        );
+        await setDoc(userRef, profile);
+      }
+
+      setCurrentUser(profile);
       showToast(
-        lang === 'ar' ? `مرحباً بك ${newProfile.name}` : `Welcome ${newProfile.name}`,
+        lang === 'ar' ? `مرحباً بك ${profile.name}` : `Welcome ${profile.name}`,
         lang === 'ar' ? 'تم تسجيل الدخول عبر حساب Google بنجاح' : 'Signed in with Google successfully',
         'success'
       );
-      navigateTo('home');
-    } catch {
-      // Fallback to customer demo if popup blocked in iframe
-      loginWithDemoRole('customer');
+
+      const nextView = pendingRedirectView || 'home';
+      setPendingRedirectView(null);
+      setActiveView(nextView);
+    } catch (err) {
+      const msg = mapFirebaseAuthError(err, lang);
+      showToast(
+        lang === 'ar' ? 'تعذر تسجيل الدخول عبر Google' : 'Google Sign-In Cancelled',
+        msg,
+        'error'
+      );
     }
-  }, [lang, showToast, navigateTo, loginWithDemoRole]);
+  }, [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView]);
 
   const registerAccount = useCallback(
-    async (name: string, email: string, phone: string, role: 'customer' | 'seller') => {
-      const newUser: UserProfile = {
-        id: `user-${Date.now()}`,
-        name,
-        email,
-        phone,
-        role,
-        sellerId: role === 'seller' ? 'seller-2' : undefined,
-        walletBalance: 250,
-        loyaltyPoints: 1000,
-        loyaltyTier: 'Silver',
-        referralCode: `ATH-${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
-        wishlist: [],
-        addresses: INITIAL_USERS[0].addresses,
-        loyaltyHistory: [
-          {
-            id: `lh-${Date.now()}`,
-            titleAr: 'مكافأة الترحيب بالعضوية الجديدة',
-            titleEn: 'New Member Welcome Bonus',
-            points: 1000,
-            date: new Date().toISOString().split('T')[0],
-          },
-        ],
-        preferences: { newsletter: true, smsAlerts: true, whatsappUpdates: true, language: lang },
-        createdAt: new Date().toISOString().split('T')[0],
-      };
-
-      setUsers((prev) => [newUser, ...prev]);
-      setCurrentUser(newUser);
-      try {
-        await setDoc(doc(db, 'users', newUser.id), newUser);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.CREATE, 'users');
-      }
-      showToast(
-        lang === 'ar' ? 'تم إنشاء حسابك في أثيل بنجاح' : 'Account Created Successfully',
-        lang === 'ar' ? 'حصلت على ١,٠٠٠ نقطة ولاء و ٢٥٠ ر.س رصيد ترحيبي!' : '1,000 loyalty points & 250 SAR welcome credit added!',
-        'success'
-      );
-      navigateTo(role === 'seller' ? 'seller-dashboard' : 'home');
+    async (
+      name: string,
+      email: string,
+      phone: string,
+      _role: 'customer' | 'seller' = 'customer',
+      password: string = ''
+    ) => {
+      await registerWithEmail({ name, email, phone, password });
     },
-    [lang, showToast, navigateTo]
+    [registerWithEmail]
   );
 
   const logout = useCallback(async () => {
     try {
-      await signOut(auth);
+      if (auth.currentUser) {
+        await signOut(auth);
+      }
     } catch {
-      // ignore
+      // ignore signOut errors
     }
+    setIsDemoMode(false);
     setCurrentUser(null);
+    setOrders([]);
+    setAuditLogs([]);
     showToast(
-      lang === 'ar' ? 'تم تسجيل الخروج' : 'Signed Out',
+      lang === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Signed Out Successfully',
       lang === 'ar' ? 'نتطلع لرؤيتك مجدداً في أثيل' : 'We look forward to welcoming you back',
       'info'
     );
-    navigateTo('login');
-  }, [lang, showToast, navigateTo]);
+    setActiveView('home');
+  }, [lang, showToast]);
 
   // Search & Filter Helpers
   const addRecentSearch = useCallback((q: string) => {
@@ -672,7 +1041,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     setSortBy('featured');
   }, []);
 
-  // Cart & Coupon Engine
+  // ============================================================================
+  // CART, COUPON & VAT-INCLUSIVE (15%) PRICING ENGINE
+  // ============================================================================
   const addToCart = useCallback(
     (product: Product, selectedVariants?: Record<string, string>, quantity: number = 1) => {
       if (product.stock <= 0 || product.status === 'out_of_stock') {
@@ -766,7 +1137,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const clean = code.trim().toUpperCase();
       const found = coupons.find((c) => c.code.toUpperCase() === clean && c.isActive);
       if (!found) {
-        const msg = lang === 'ar' ? 'كود الخصم غير صحيح أو منتهي الصلاحية' : 'Invalid or expired coupon code';
+        const msg =
+          lang === 'ar'
+            ? 'كود الخصم غير صحيح أو منتهي الصلاحية'
+            : 'Invalid or expired coupon code';
         showToast(msg, undefined, 'error');
         return { success: false, message: msg };
       }
@@ -807,6 +1181,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     showToast(lang === 'ar' ? 'تم إزالة الكوبون' : 'Coupon removed', undefined, 'info');
   }, [lang, showToast]);
 
+  // PHASE 7 — VAT-INCLUSIVE RETAIL PRICING CALCULATION
+  // Product prices & shipping fees INCLUDE 15% Saudi VAT.
+  // Included VAT portion = taxableAmount * 15 / 115 (never added twice).
   const cartSummary = useMemo(() => {
     const subtotal = cart.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
     const itemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
@@ -828,15 +1205,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
     }
 
-    const netAfterDiscount = Math.max(0, subtotal - discountAmount);
-    const shippingFee = netAfterDiscount === 0 || netAfterDiscount >= homepageConfig.freeShippingThreshold ? 0 : 28;
-    const vatAmount = Number((netAfterDiscount * 0.15).toFixed(2));
-    const total = Number((netAfterDiscount + vatAmount + shippingFee).toFixed(2));
+    discountAmount = Number(discountAmount.toFixed(2));
+    const netAfterDiscount = Math.max(0, Number((subtotal - discountAmount).toFixed(2)));
+    const shippingFee =
+      netAfterDiscount === 0 || netAfterDiscount >= homepageConfig.freeShippingThreshold ? 0 : 28;
+
+    // Final payable total is netAfterDiscount + shippingFee (both are VAT-inclusive)
+    const total = Number((netAfterDiscount + shippingFee).toFixed(2));
+    // Extracted 15% VAT included in the payable total: total * 15 / 115
+    const vatAmount = Number(((total * 15) / 115).toFixed(2));
     const pointsEarned = Math.floor(total / 5);
 
     return {
       subtotal,
       discountAmount,
+      netAfterDiscount,
       shippingFee,
       vatAmount,
       total,
@@ -877,7 +1260,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         if (prev.length >= 4) {
           showToast(
             lang === 'ar' ? 'الحد الأقصى للمقارنة ٤ منتجات' : 'Maximum 4 products for comparison',
-            lang === 'ar' ? 'قم بإزالة منتج لإضافة منتج آخر للمقارنة' : 'Remove one item to add another',
+            lang === 'ar'
+              ? 'قم بإزالة منتج لإضافة منتج آخر للمقارنة'
+              : 'Remove one item to add another',
             'info'
           );
           return prev;
@@ -897,7 +1282,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     setCompareIds([]);
   }, []);
 
-  // Order Placement
+  // ============================================================================
+  // ORDER PLACEMENT & CUSTOMER ACTIONS (WITH REAL ERROR HANDLING & DEMO ISOLATION)
+  // ============================================================================
   const placeOrder = useCallback(
     async ({
       address,
@@ -910,19 +1297,45 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     }): Promise<Order | null> => {
       if (cart.length === 0) return null;
 
-      const expressExtra = deliverySpeed === 'express' && cartSummary.shippingFee > 0 ? 17 : 0;
-      const finalShipping = cartSummary.shippingFee + expressExtra;
-      const finalTotal = Number((cartSummary.total + expressExtra).toFixed(2));
+      if (!currentUser) {
+        showToast(
+          lang === 'ar' ? 'يرجى تسجيل الدخول لإتمام الطلب' : 'Please sign in to place your order',
+          undefined,
+          'error'
+        );
+        setPendingRedirectView('checkout');
+        setActiveView('login');
+        return null;
+      }
+
+      // Calculate VAT-inclusive final shipping & total
+      const finalShipping = deliverySpeed === 'express' ? 35 : cartSummary.shippingFee;
+      const finalTotal = Number((cartSummary.netAfterDiscount + finalShipping).toFixed(2));
+      const finalVatAmount = Number(((finalTotal * 15) / 115).toFixed(2));
+
+      if (paymentMethod === 'wallet' && currentUser.walletBalance < finalTotal) {
+        showToast(
+          lang === 'ar' ? 'رصيد محفظة أثيل غير كافٍ' : 'Insufficient Atheel Wallet Balance',
+          lang === 'ar'
+            ? 'يرجى اختيار وسيلة دفع أخرى مثل مدى أو Apple Pay أو البطاقات الائتمانية'
+            : 'Please select another payment method such as Mada, Apple Pay, or Credit Card',
+          'error'
+        );
+        return null;
+      }
+
       const nowIso = new Date().toISOString();
       const orderNum = `ATH-${Math.floor(10000 + Math.random() * 89999)}`;
+      const uniqueSellerIds = Array.from(new Set(cart.map((c) => c.product.sellerId)));
 
       const newOrder: Order = {
         id: `ord-${Date.now()}`,
         orderNumber: orderNum,
-        customerId: currentUser?.id || 'user-customer-1',
-        customerName: currentUser?.name || address.recipientName,
-        customerEmail: currentUser?.email || 'customer@atheel.sa',
+        customerId: isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id,
+        customerName: currentUser.name || address.recipientName,
+        customerEmail: currentUser.email || 'customer@atheel.sa',
         customerPhone: address.phone,
+        sellerIds: uniqueSellerIds,
         items: cart.map((c) => ({
           productId: c.productId,
           sku: c.product.sku,
@@ -939,12 +1352,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         address,
         deliverySpeed,
         paymentMethod,
-        paymentReference: `${paymentMethod.toUpperCase()}-SA-${Math.floor(1000000 + Math.random() * 9000000)}`,
+        paymentReference: `${paymentMethod.toUpperCase()}-SA-${Math.floor(
+          1000000 + Math.random() * 9000000
+        )}`,
         subtotal: cartSummary.subtotal,
         discountAmount: cartSummary.discountAmount,
         couponCode: appliedCoupon?.code || '',
         shippingFee: finalShipping,
-        vatAmount: cartSummary.vatAmount,
+        vatAmount: finalVatAmount,
         total: finalTotal,
         status: 'confirmed',
         trackingNumber: `SPL-${Math.floor(100000000 + Math.random() * 900000000)}SA`,
@@ -955,65 +1370,72 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         updatedAt: nowIso,
       };
 
+      const updatedUser: UserProfile = {
+        ...currentUser,
+        walletBalance:
+          paymentMethod === 'wallet'
+            ? Math.max(0, Number((currentUser.walletBalance - finalTotal).toFixed(2)))
+            : currentUser.walletBalance,
+        loyaltyPoints: currentUser.loyaltyPoints + Math.floor(finalTotal / 5),
+        loyaltyHistory: [
+          {
+            id: `lh-${Date.now()}`,
+            titleAr: `مكافأة شراء طلب #${orderNum}`,
+            titleEn: `Purchase Reward Order #${orderNum}`,
+            points: Math.floor(finalTotal / 5),
+            date: nowIso.split('T')[0],
+          },
+          ...currentUser.loyaltyHistory,
+        ],
+      };
+
+      // Persist to Firestore if not in Demo Mode
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'orders', newOrder.id), newOrder);
+          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+        } catch (err) {
+          logFirestoreFailure(err, OperationType.CREATE, 'orders');
+          showToast(
+            lang === 'ar' ? 'تعذر تسجيل الطلب في قاعدة البيانات' : 'Failed to Place Order',
+            lang === 'ar'
+              ? 'يرجى التحقق من اتصال الإنترنت وصلاحيات الحساب ثم المحاولة مجدداً'
+              : 'Please verify your connection and account session, then try again',
+            'error'
+          );
+          return null;
+        }
+      }
+
+      // Update local state after successful persistence (or in Demo Mode)
       setOrders((prev) => [newOrder, ...prev]);
       setLastCreatedOrder(newOrder);
+      setCurrentUser(updatedUser);
 
-      // Update user loyalty points & wallet if paid with wallet
-      if (currentUser) {
-        const updatedUser: UserProfile = {
-          ...currentUser,
-          walletBalance:
-            paymentMethod === 'wallet'
-              ? Math.max(0, currentUser.walletBalance - finalTotal)
-              : currentUser.walletBalance,
-          loyaltyPoints: currentUser.loyaltyPoints + cartSummary.pointsEarned,
-          loyaltyHistory: [
-            {
-              id: `lh-${Date.now()}`,
-              titleAr: `مكافأة شراء طلب #${orderNum}`,
-              titleEn: `Purchase Reward Order #${orderNum}`,
-              points: cartSummary.pointsEarned,
-              date: nowIso.split('T')[0],
-            },
-            ...currentUser.loyaltyHistory,
-          ],
-        };
-        setCurrentUser(updatedUser);
-        setDoc(doc(db, 'users', updatedUser.id), updatedUser).catch((e) =>
-          handleFirestoreError(e, OperationType.UPDATE, 'users')
-        );
-      }
+      // Update local product stock representation
+      setProducts((prev) =>
+        prev.map((prod) => {
+          const cartItem = cart.find((c) => c.productId === prod.id);
+          if (!cartItem) return prod;
+          const nextStock = Math.max(0, prod.stock - cartItem.quantity);
+          return {
+            ...prod,
+            stock: nextStock,
+            soldCount: prod.soldCount + cartItem.quantity,
+            status: nextStock === 0 ? 'out_of_stock' : prod.status,
+          };
+        })
+      );
 
-      // Persist order and decrement product stock in Firestore
-      try {
-        await setDoc(doc(db, 'orders', newOrder.id), newOrder);
-        for (const item of cart) {
-          const prod = products.find((p) => p.id === item.productId);
-          if (prod) {
-            const nextStock = Math.max(0, prod.stock - item.quantity);
-            const updatedProd: Product = {
-              ...prod,
-              stock: nextStock,
-              soldCount: prod.soldCount + item.quantity,
-              status: nextStock === 0 ? 'out_of_stock' : prod.status,
-            };
-            await setDoc(doc(db, 'products', prod.id), updatedProd);
-          }
-        }
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, 'orders');
-      }
-
-      // Add notification
       setNotifications((prev) => [
         {
           id: `notif-${Date.now()}`,
-          userId: 'all',
+          userId: currentUser.id,
           type: 'order',
-          titleAr: `تم تأكيد طلبك #${orderNum} بنجاح 🎉`,
-          titleEn: `Order #${orderNum} Confirmed 🎉`,
-          messageAr: `إجمالي الطلب ${formatPrice(finalTotal)} شامل ضريبة القيمة المضافة. رقم التتبع: ${newOrder.trackingNumber}`,
-          messageEn: `Total ${formatPrice(finalTotal)} incl. 15% VAT. Tracking: ${newOrder.trackingNumber}`,
+          titleAr: `تم تأكيد طلبك #${orderNum} بنجاح`,
+          titleEn: `Order #${orderNum} Confirmed`,
+          messageAr: `إجمالي الطلب ${formatPrice(finalTotal)} (شامل ضريبة القيمة المضافة ١٥٪). رقم التتبع: ${newOrder.trackingNumber}`,
+          messageEn: `Total ${formatPrice(finalTotal)} (incl. 15% VAT). Tracking: ${newOrder.trackingNumber}`,
           read: false,
           linkView: 'orders',
           createdAt: lang === 'ar' ? 'الآن' : 'Just now',
@@ -1023,14 +1445,31 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       clearCart();
       showToast(
-        lang === 'ar' ? `تم تأكيد طلبك #${orderNum} بنجاح!` : `Order #${orderNum} Placed Successfully!`,
-        lang === 'ar' ? 'تم إصدار الفاتورة الضريبية وإرسال تفاصيل الشحنة' : 'Tax invoice generated and shipment scheduled',
+        lang === 'ar'
+          ? `تم تأكيد طلبك #${orderNum} بنجاح!`
+          : `Order #${orderNum} Placed Successfully!`,
+        lang === 'ar'
+          ? 'تم إصدار الفاتورة الضريبية وإرسال تفاصيل الشحنة'
+          : 'Tax invoice generated and shipment scheduled',
         'success'
       );
-      navigateTo('order-confirmation');
+      setActiveView('order-confirmation');
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
       return newOrder;
     },
-    [cart, cartSummary, appliedCoupon, currentUser, products, formatPrice, lang, clearCart, showToast, navigateTo]
+    [
+      cart,
+      cartSummary,
+      appliedCoupon,
+      currentUser,
+      isDemoMode,
+      formatPrice,
+      lang,
+      clearCart,
+      showToast,
+    ]
   );
 
   const cancelOrder = useCallback(
@@ -1043,23 +1482,42 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         cancelReason: reason,
         updatedAt: new Date().toISOString(),
       };
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
-      try {
-        await setDoc(doc(db, 'orders', orderId), updated);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'orders');
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'orders', orderId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'orders');
+          showToast(
+            lang === 'ar' ? 'تعذر إلغاء الطلب حالياً' : 'Failed to Cancel Order',
+            undefined,
+            'error'
+          );
+          return;
+        }
       }
+
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
       showToast(
-        lang === 'ar' ? `تم إلغاء الطلب #${target.orderNumber}` : `Order #${target.orderNumber} Cancelled`,
-        lang === 'ar' ? 'سيتم استرداد المبلغ تلقائياً إلى وسيلة الدفع أو المحفظة' : 'Refund initiated automatically',
+        lang === 'ar'
+          ? `تم إلغاء الطلب #${target.orderNumber}`
+          : `Order #${target.orderNumber} Cancelled`,
+        lang === 'ar'
+          ? 'سيتم استرداد المبلغ تلقائياً إلى وسيلة الدفع أو المحفظة'
+          : 'Refund initiated automatically',
         'info'
       );
     },
-    [orders, lang, showToast]
+    [orders, isDemoMode, lang, showToast]
   );
 
   const requestReturn = useCallback(
-    async (orderId: string, reasonAr: string, details: string, refundMethod: 'wallet' | 'original_payment') => {
+    async (
+      orderId: string,
+      reasonAr: string,
+      details: string,
+      refundMethod: 'wallet' | 'original_payment'
+    ) => {
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
       const updated: Order = {
@@ -1075,49 +1533,72 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         },
         updatedAt: new Date().toISOString(),
       };
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
-      try {
-        await setDoc(doc(db, 'orders', orderId), updated);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'orders');
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'orders', orderId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'orders');
+          showToast(
+            lang === 'ar' ? 'تعذر إرسال طلب الإرجاع' : 'Failed to Submit Return Request',
+            undefined,
+            'error'
+          );
+          return;
+        }
       }
+
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
       showToast(
         lang === 'ar' ? 'تم تسجيل طلب الإرجاع بنجاح' : 'Return Request Submitted',
-        lang === 'ar' ? 'سيتواصل معك مندوب سبل لاستلام الشحنة من عنوانك الوطني مجاناً' : 'Courier pickup scheduled free of charge',
+        lang === 'ar'
+          ? 'سيتواصل معك مندوب سبل لاستلام الشحنة من عنوانك الوطني مجاناً'
+          : 'Courier pickup scheduled free of charge',
         'success'
       );
     },
-    [orders, lang, showToast]
+    [orders, isDemoMode, lang, showToast]
   );
 
   // Address Management
   const saveAddress = useCallback(
-    async (address: SaudiAddress) => {
-      if (!currentUser) return;
+    async (address: SaudiAddress): Promise<boolean> => {
+      if (!currentUser) return false;
       const exists = currentUser.addresses.some((a) => a.id === address.id);
       let nextAddresses = exists
         ? currentUser.addresses.map((a) => (a.id === address.id ? address : a))
         : [address, ...currentUser.addresses];
 
-      if (address.isDefault) {
+      if (address.isDefault || nextAddresses.length === 1) {
         nextAddresses = nextAddresses.map((a) => ({ ...a, isDefault: a.id === address.id }));
       }
 
-      const updatedUser = { ...currentUser, addresses: nextAddresses };
+      const updatedUser: UserProfile = { ...currentUser, addresses: nextAddresses };
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'users');
+          showToast(
+            lang === 'ar' ? 'تعذر حفظ العنوان الوطني' : 'Failed to Save Address',
+            undefined,
+            'error'
+          );
+          return false;
+        }
+      }
+
       setCurrentUser(updatedUser);
       setUsers((prev) => prev.map((u) => (u.id === updatedUser.id ? updatedUser : u)));
-      try {
-        await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'users');
-      }
       showToast(
         lang === 'ar' ? 'تم حفظ العنوان الوطني بنجاح' : 'Saudi National Address Saved',
         address.labelAr,
         'success'
       );
+      return true;
     },
-    [currentUser, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast]
   );
 
   const deleteAddress = useCallback(
@@ -1125,15 +1606,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser) return;
       const nextAddresses = currentUser.addresses.filter((a) => a.id !== addressId);
       const updatedUser = { ...currentUser, addresses: nextAddresses };
-      setCurrentUser(updatedUser);
-      try {
-        await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'users');
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'users');
+          showToast(lang === 'ar' ? 'تعذر حذف العنوان' : 'Failed to delete address', undefined, 'error');
+          return;
+        }
       }
+
+      setCurrentUser(updatedUser);
       showToast(lang === 'ar' ? 'تم حذف العنوان' : 'Address Deleted', undefined, 'info');
     },
-    [currentUser, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast]
   );
 
   const setDefaultAddress = useCallback(
@@ -1144,51 +1631,81 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         isDefault: a.id === addressId,
       }));
       const updatedUser = { ...currentUser, addresses: nextAddresses };
-      setCurrentUser(updatedUser);
-      try {
-        await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'users');
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'users');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث العنوان الافتراضي' : 'Failed to update default address',
+            undefined,
+            'error'
+          );
+          return;
+        }
       }
+
+      setCurrentUser(updatedUser);
       showToast(
         lang === 'ar' ? 'تم تعيين العنوان الافتراضي' : 'Default Address Updated',
         undefined,
         'success'
       );
     },
-    [currentUser, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast]
   );
 
   const updateUserProfile = useCallback(
     async (updates: Partial<UserProfile>) => {
       if (!currentUser) return;
-      const updated = { ...currentUser, ...updates };
+      // Never allow role or sellerId escalation via client profile update
+      const safeUpdates = { ...updates };
+      delete safeUpdates.role;
+      delete safeUpdates.sellerId;
+      delete safeUpdates.id;
+
+      const updated: UserProfile = { ...currentUser, ...safeUpdates };
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'users', updated.id), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'users');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث الملف الشخصي' : 'Failed to Update Profile',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
       setCurrentUser(updated);
       setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
-      try {
-        await setDoc(doc(db, 'users', updated.id), updated);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'users');
-      }
       showToast(
         lang === 'ar' ? 'تم تحديث بيانات الحساب بنجاح' : 'Profile Updated Successfully',
         undefined,
         'success'
       );
     },
-    [currentUser, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast]
   );
 
   const submitReview = useCallback(
     async (productId: string, rating: number, title: string, comment: string) => {
+      if (!currentUser) {
+        showToast(lang === 'ar' ? 'يرجى تسجيل الدخول لإضافة تقييم' : 'Please sign in to submit a review', undefined, 'error');
+        return;
+      }
       const targetProd = products.find((p) => p.id === productId);
       const newRev: Review = {
         id: `rev-${Date.now()}`,
         productId,
         productTitleAr: targetProd?.titleAr || '',
         productTitleEn: targetProd?.titleEn || '',
-        userId: currentUser?.id || 'user-customer-1',
-        userName: currentUser?.name || 'عميل أثيل الموثق',
+        userId: isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id,
+        userName: currentUser.name,
         rating,
         title,
         comment,
@@ -1198,63 +1715,73 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         status: 'approved',
       };
 
-      setReviews((prev) => [newRev, ...prev]);
-      try {
-        await setDoc(doc(db, 'reviews', newRev.id), newRev);
-        if (targetProd) {
-          const newCount = targetProd.reviewCount + 1;
-          const newAvg = Number(
-            ((targetProd.rating * targetProd.reviewCount + rating) / newCount).toFixed(2)
-          );
-          const updatedProd = { ...targetProd, rating: newAvg, reviewCount: newCount };
-          await setDoc(doc(db, 'products', targetProd.id), updatedProd);
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'reviews', newRev.id), newRev);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'reviews');
+          showToast(lang === 'ar' ? 'تعذر نشر التقييم' : 'Failed to publish review', undefined, 'error');
+          return;
         }
-      } catch (e) {
-        handleFirestoreError(e, OperationType.CREATE, 'reviews');
       }
 
+      setReviews((prev) => [newRev, ...prev]);
       showToast(
         lang === 'ar' ? 'شكراً لتقييمك! تمت إضافة التقييم الموثق' : 'Verified Review Published!',
         undefined,
         'success'
       );
     },
-    [products, currentUser, lang, showToast]
+    [products, currentUser, isDemoMode, lang, showToast]
   );
 
   const submitQuestion = useCallback(
     async (productId: string, questionText: string) => {
+      if (!currentUser) {
+        showToast(lang === 'ar' ? 'يرجى تسجيل الدخول لطرح سؤال' : 'Please sign in to ask a question', undefined, 'error');
+        return;
+      }
       const newQ: ProductQuestion = {
         id: `qa-${Date.now()}`,
         productId,
-        userName: currentUser?.name || 'عميل أثيل',
+        userName: currentUser.name,
         questionAr: questionText,
         questionEn: questionText,
         createdAt: new Date().toISOString().split('T')[0],
       };
-      setQuestions((prev) => [newQ, ...prev]);
-      try {
-        await setDoc(doc(db, 'questions', newQ.id), newQ);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.CREATE, 'questions');
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'questions', newQ.id), newQ);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'questions');
+          showToast(lang === 'ar' ? 'تعذر إرسال السؤال' : 'Failed to send question', undefined, 'error');
+          return;
+        }
       }
+
+      setQuestions((prev) => [newQ, ...prev]);
       showToast(
         lang === 'ar' ? 'تم إرسال سؤالك للتاجر المعتمد' : 'Question Sent to Verified Seller',
         undefined,
         'success'
       );
     },
-    [currentUser, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast]
   );
 
   const submitSupportTicket = useCallback(
     async (subject: string, categoryAr: string, message: string, orderNumber?: string) => {
+      if (!currentUser) {
+        showToast(lang === 'ar' ? 'يرجى تسجيل الدخول لفتح تذكرة دعم' : 'Please sign in to create a ticket', undefined, 'error');
+        return;
+      }
       const newTkt: SupportTicket = {
         id: `tkt-${Date.now()}`,
         ticketNumber: `TKT-${Math.floor(4100 + Math.random() * 5000)}`,
-        userId: currentUser?.id || 'guest',
-        userName: currentUser?.name || 'عميل أثيل',
-        userEmail: currentUser?.email || 'customer@atheel.sa',
+        userId: isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id,
+        userName: currentUser.name,
+        userEmail: currentUser.email,
         categoryAr,
         categoryEn: categoryAr,
         subject,
@@ -1263,26 +1790,38 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         status: 'open',
         createdAt: new Date().toISOString().split('T')[0],
       };
-      setTickets((prev) => [newTkt, ...prev]);
-      try {
-        await setDoc(doc(db, 'tickets', newTkt.id), newTkt);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.CREATE, 'tickets');
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'tickets', newTkt.id), newTkt);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+          showToast(lang === 'ar' ? 'تعذر إرسال تذكرة الدعم' : 'Failed to submit support ticket', undefined, 'error');
+          return;
+        }
       }
+
+      setTickets((prev) => [newTkt, ...prev]);
       showToast(
-        lang === 'ar' ? `تم فتح تذكرة الدعم #${newTkt.ticketNumber}` : `Support Ticket #${newTkt.ticketNumber} Created`,
-        lang === 'ar' ? 'سيرد عليك فريق العناية بالعملاء VIP خلال أقل من ساعة' : 'Our VIP Concierge team will respond within 1 hour',
+        lang === 'ar'
+          ? `تم فتح تذكرة الدعم #${newTkt.ticketNumber}`
+          : `Support Ticket #${newTkt.ticketNumber} Created`,
+        lang === 'ar'
+          ? 'سيرد عليك فريق العناية بالعملاء VIP خلال أقل من ساعة'
+          : 'Our VIP Concierge team will respond within 1 hour',
         'success'
       );
     },
-    [currentUser, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast]
   );
 
   const markAllNotificationsRead = useCallback(() => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   }, []);
 
-  // Seller Actions
+  // ============================================================================
+  // SELLER & ADMIN ACTIONS (PROTECTED & DEMO-ISOLATED)
+  // ============================================================================
   const addAuditLog = useCallback(
     async (
       actionAr: string,
@@ -1301,120 +1840,150 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
       };
       setAuditLogs((prev) => [entry, ...prev]);
-      try {
-        await setDoc(doc(db, 'auditLogs', entry.id), entry);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.CREATE, 'auditLogs');
+      if (!isDemoMode && currentUser?.role === 'admin') {
+        try {
+          await setDoc(doc(db, 'auditLogs', entry.id), entry);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'auditLogs');
+        }
       }
     },
-    [currentUser]
+    [currentUser, isDemoMode]
   );
 
   const saveProduct = useCallback(
     async (product: Product) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) {
+        showToast(lang === 'ar' ? 'غير مصرح بهذا الإجراء' : 'Unauthorized action', undefined, 'error');
+        return;
+      }
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'products', product.id), product);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.WRITE, 'products');
+          showToast(lang === 'ar' ? 'تعذر حفظ المنتج' : 'Failed to save product', undefined, 'error');
+          return;
+        }
+      }
       setProducts((prev) => {
         const exists = prev.some((p) => p.id === product.id);
         return exists ? prev.map((p) => (p.id === product.id ? product : p)) : [product, ...prev];
       });
-      try {
-        await setDoc(doc(db, 'products', product.id), product);
-        await addAuditLog(
-          `حفظ وتحديث بيانات المنتج «${product.titleAr}» بسعر ${product.price} ر.س`,
-          `Saved product "${product.titleEn}" at SAR ${product.price}`,
-          'product',
-          product.id
-        );
-      } catch (e) {
-        handleFirestoreError(e, OperationType.WRITE, 'products');
-      }
+      await addAuditLog(
+        `حفظ وتحديث بيانات المنتج «${product.titleAr}» بسعر ${product.price} ر.س`,
+        `Saved product "${product.titleEn}" at SAR ${product.price}`,
+        'product',
+        product.id
+      );
       showToast(
-        lang === 'ar' ? 'تم حفظ المنتج في قاعدة البيانات بنجاح' : 'Product Saved to Database',
+        lang === 'ar' ? 'تم حفظ المنتج بنجاح' : 'Product Saved Successfully',
         lang === 'ar' ? product.titleAr : product.titleEn,
         'success'
       );
     },
-    [addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, addAuditLog, lang, showToast]
   );
 
   const deleteProduct = useCallback(
     async (productId: string) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) {
+        showToast(lang === 'ar' ? 'غير مصرح بهذا الإجراء' : 'Unauthorized action', undefined, 'error');
+        return;
+      }
       const target = products.find((p) => p.id === productId);
-      setProducts((prev) => prev.filter((p) => p.id !== productId));
-      try {
-        await deleteDoc(doc(db, 'products', productId));
-        if (target) {
-          await addAuditLog(
-            `حذف المنتج «${target.titleAr}» من الكتالوج`,
-            `Deleted product "${target.titleEn}"`,
-            'product',
-            productId
-          );
+      if (!isDemoMode) {
+        try {
+          await deleteDoc(doc(db, 'products', productId));
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.DELETE, 'products');
+          showToast(lang === 'ar' ? 'تعذر حذف المنتج' : 'Failed to delete product', undefined, 'error');
+          return;
         }
-      } catch (e) {
-        handleFirestoreError(e, OperationType.DELETE, 'products');
+      }
+      setProducts((prev) => prev.filter((p) => p.id !== productId));
+      if (target) {
+        await addAuditLog(
+          `حذف المنتج «${target.titleAr}» من الكتالوج`,
+          `Deleted product "${target.titleEn}"`,
+          'product',
+          productId
+        );
       }
       showToast(lang === 'ar' ? 'تم حذف المنتج' : 'Product Deleted', undefined, 'info');
     },
-    [products, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, products, addAuditLog, lang, showToast]
   );
 
   const bulkUpdateProductStatus = useCallback(
     async (productIds: string[], status: ProductStatus) => {
-      setProducts((prev) =>
-        prev.map((p) => (productIds.includes(p.id) ? { ...p, status } : p))
-      );
-      try {
-        for (const id of productIds) {
-          const prod = products.find((p) => p.id === id);
-          if (prod) {
-            await setDoc(doc(db, 'products', id), { ...prod, status });
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!isDemoMode) {
+        try {
+          for (const id of productIds) {
+            const prod = products.find((p) => p.id === id);
+            if (prod) {
+              await setDoc(doc(db, 'products', id), { ...prod, status });
+            }
           }
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'products');
+          showToast(lang === 'ar' ? 'تعذر تحديث المنتجات' : 'Failed to update products', undefined, 'error');
+          return;
         }
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'products');
       }
+      setProducts((prev) => prev.map((p) => (productIds.includes(p.id) ? { ...p, status } : p)));
       showToast(
-        lang === 'ar' ? `تم تحديث حالة ${productIds.length} منتجات` : `Updated ${productIds.length} products`,
+        lang === 'ar'
+          ? `تم تحديث حالة ${productIds.length} منتجات`
+          : `Updated ${productIds.length} products`,
         undefined,
         'success'
       );
     },
-    [products, lang, showToast]
+    [currentUser, isDemoMode, products, lang, showToast]
   );
 
   const updateProductStock = useCallback(
     async (productId: string, newStock: number, lowStockThreshold?: number) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = products.find((p) => p.id === productId);
       if (!target) return;
       const updated: Product = {
         ...target,
         stock: Math.max(0, newStock),
         lowStockThreshold: lowStockThreshold ?? target.lowStockThreshold,
-        status: newStock <= 0 ? 'out_of_stock' : target.status === 'out_of_stock' ? 'active' : target.status,
+        status:
+          newStock <= 0 ? 'out_of_stock' : target.status === 'out_of_stock' ? 'active' : target.status,
       };
-      setProducts((prev) => prev.map((p) => (p.id === productId ? updated : p)));
-      try {
-        await setDoc(doc(db, 'products', productId), updated);
-        await addAuditLog(
-          `تحديث مخزون «${target.titleAr}» إلى ${newStock} قطعة`,
-          `Updated stock for "${target.titleEn}" to ${newStock} units`,
-          'product',
-          productId
-        );
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'products');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'products', productId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'products');
+          showToast(lang === 'ar' ? 'تعذر تحديث المخزون' : 'Failed to update stock', undefined, 'error');
+          return;
+        }
       }
+      setProducts((prev) => prev.map((p) => (p.id === productId ? updated : p)));
+      await addAuditLog(
+        `تحديث مخزون «${target.titleAr}» إلى ${newStock} قطعة`,
+        `Updated stock for "${target.titleEn}" to ${newStock} units`,
+        'product',
+        productId
+      );
       showToast(
         lang === 'ar' ? 'تم تحديث المخزون الفعلي بنجاح' : 'Inventory Stock Updated',
         `${lang === 'ar' ? target.titleAr : target.titleEn}: ${newStock}`,
         'success'
       );
     },
-    [products, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, products, addAuditLog, lang, showToast]
   );
 
   const updateOrderStatus = useCallback(
     async (orderId: string, newStatus: OrderStatus, trackingNumber?: string) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
       const nowDate = new Date().toISOString().split('T')[0];
@@ -1425,64 +1994,82 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         timeline: buildOrderTimeline(newStatus, nowDate),
         updatedAt: new Date().toISOString(),
       };
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
-      try {
-        await setDoc(doc(db, 'orders', orderId), updated);
-        await addAuditLog(
-          `تغيير حالة الطلب #${target.orderNumber} إلى (${newStatus})`,
-          `Updated Order #${target.orderNumber} status to ${newStatus}`,
-          'order',
-          orderId
-        );
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'orders');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'orders', orderId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'orders');
+          showToast(lang === 'ar' ? 'تعذر تحديث حالة الطلب' : 'Failed to update order status', undefined, 'error');
+          return;
+        }
       }
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+      await addAuditLog(
+        `تغيير حالة الطلب #${target.orderNumber} إلى (${newStatus})`,
+        `Updated Order #${target.orderNumber} status to ${newStatus}`,
+        'order',
+        orderId
+      );
       showToast(
-        lang === 'ar' ? `تم تحديث حالة الطلب #${target.orderNumber}` : `Order #${target.orderNumber} Status Updated`,
+        lang === 'ar'
+          ? `تم تحديث حالة الطلب #${target.orderNumber}`
+          : `Order #${target.orderNumber} Status Updated`,
         undefined,
         'success'
       );
     },
-    [orders, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, orders, addAuditLog, lang, showToast]
   );
 
   const saveCoupon = useCallback(
     async (coupon: Coupon) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'coupons', coupon.id), coupon);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.WRITE, 'coupons');
+          showToast(lang === 'ar' ? 'تعذر حفظ الكوبون' : 'Failed to save coupon', undefined, 'error');
+          return;
+        }
+      }
       setCoupons((prev) => {
         const exists = prev.some((c) => c.id === coupon.id);
         return exists ? prev.map((c) => (c.id === coupon.id ? coupon : c)) : [coupon, ...prev];
       });
-      try {
-        await setDoc(doc(db, 'coupons', coupon.id), coupon);
-        await addAuditLog(
-          `إنشاء/تحديث كوبون الخصم ${coupon.code} بقيمة ${coupon.value}${coupon.type === 'percentage' ? '%' : ' ر.س'}`,
-          `Saved coupon ${coupon.code}`,
-          'coupon',
-          coupon.id
-        );
-      } catch (e) {
-        handleFirestoreError(e, OperationType.WRITE, 'coupons');
-      }
+      await addAuditLog(
+        `إنشاء/تحديث كوبون الخصم ${coupon.code} بقيمة ${coupon.value}${
+          coupon.type === 'percentage' ? '%' : ' ر.س'
+        }`,
+        `Saved coupon ${coupon.code}`,
+        'coupon',
+        coupon.id
+      );
       showToast(
         lang === 'ar' ? `تم حفظ الكوبون ${coupon.code}` : `Coupon ${coupon.code} Saved`,
         undefined,
         'success'
       );
     },
-    [addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, addAuditLog, lang, showToast]
   );
 
   const toggleCouponStatus = useCallback(
     async (couponId: string) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = coupons.find((c) => c.id === couponId);
       if (!target) return;
       const updated = { ...target, isActive: !target.isActive };
-      setCoupons((prev) => prev.map((c) => (c.id === couponId ? updated : c)));
-      try {
-        await setDoc(doc(db, 'coupons', couponId), updated);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'coupons');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'coupons', couponId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'coupons');
+          showToast(lang === 'ar' ? 'تعذر تحديث الكوبون' : 'Failed to update coupon', undefined, 'error');
+          return;
+        }
       }
+      setCoupons((prev) => prev.map((c) => (c.id === couponId ? updated : c)));
       showToast(
         lang === 'ar'
           ? `تم ${updated.isActive ? 'تفعيل' : 'إيقاف'} الكوبون ${target.code}`
@@ -1491,11 +2078,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'info'
       );
     },
-    [coupons, lang, showToast]
+    [currentUser, isDemoMode, coupons, lang, showToast]
   );
 
   const submitSellerApplication = useCallback(
     async (sellerData: Partial<Seller>) => {
+      if (!currentUser) {
+        showToast(
+          lang === 'ar' ? 'يرجى تسجيل الدخول لتقديم طلب انضمام كمتجر' : 'Please sign in to submit a seller application',
+          undefined,
+          'error'
+        );
+        return;
+      }
       const newSeller: Seller = {
         id: `seller-${Date.now()}`,
         nameAr: sellerData.nameAr || 'متجر سعودي جديد',
@@ -1507,9 +2102,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         crNumber: sellerData.crNumber || '1010884920',
         vatNumber: sellerData.vatNumber || '310884920100003',
         iban: sellerData.iban || 'SA4480000000123456789012',
-        ownerName: sellerData.ownerName || currentUser?.name || 'تاجر أثيل',
-        email: sellerData.email || currentUser?.email || 'merchant@atheel.sa',
-        phone: sellerData.phone || '+966 50 000 0000',
+        ownerName: sellerData.ownerName || currentUser.name,
+        email: sellerData.email || currentUser.email,
+        phone: sellerData.phone || currentUser.phone || '+966 50 000 0000',
         status: 'pending',
         verifiedBadge: false,
         rating: 5.0,
@@ -1525,23 +2120,38 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         categories: sellerData.categories || ['perfumes'],
         payoutHistory: [],
       };
-      setSellers((prev) => [newSeller, ...prev]);
-      try {
-        await setDoc(doc(db, 'sellers', newSeller.id), newSeller);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.CREATE, 'sellers');
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'sellers', newSeller.id), newSeller);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'sellers');
+          showToast(
+            lang === 'ar' ? 'تعذر إرسال طلب الانضمام' : 'Failed to submit seller application',
+            undefined,
+            'error'
+          );
+          return;
+        }
       }
+
+      setSellers((prev) => [newSeller, ...prev]);
       showToast(
-        lang === 'ar' ? 'تم إرسال طلب انضمام المتجر للاعتماد' : 'Seller Application Submitted',
-        lang === 'ar' ? 'ستقوم الإدارة بمراجعة السجل التجاري والرقم الضريبي' : 'Executive team will verify your CR & VAT',
+        lang === 'ar'
+          ? 'تم إرسال طلب انضمام المتجر للاعتماد'
+          : 'Seller Application Submitted',
+        lang === 'ar'
+          ? 'سيبقى حسابك بصفة عميل حتى تقوم الإدارة بمراجعة السجل التجاري واعتماد المتجر'
+          : 'Your account remains a Customer until Executive Admin verifies your CR & VAT',
         'success'
       );
     },
-    [currentUser, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast]
   );
 
   const requestSellerPayout = useCallback(
     async (sellerId: string, amount: number) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = sellers.find((s) => s.id === sellerId);
       if (!target || amount <= 0 || amount > target.availableBalance) return;
       const updated: Seller = {
@@ -1560,24 +2170,33 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           ...target.payoutHistory,
         ],
       };
-      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
-      try {
-        await setDoc(doc(db, 'sellers', sellerId), updated);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'sellers');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'sellers', sellerId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
+          showToast(lang === 'ar' ? 'تعذر طلب تحويل الأرباح' : 'Failed to request payout', undefined, 'error');
+          return;
+        }
       }
+      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
       showToast(
-        lang === 'ar' ? `تم طلب تحويل الأرباح (${formatPrice(amount)})` : `Payout of ${formatPrice(amount)} Initiated`,
-        lang === 'ar' ? 'سيتم إيداع المبلغ في حسابكم البنكي عبر نظام سار خلال ٢٤ ساعة' : 'Funds will arrive via SARIE within 24 hours',
+        lang === 'ar'
+          ? `تم طلب تحويل الأرباح (${formatPrice(amount)})`
+          : `Payout of ${formatPrice(amount)} Initiated`,
+        lang === 'ar'
+          ? 'سيتم إيداع المبلغ في حسابكم البنكي عبر نظام سار خلال ٢٤ ساعة'
+          : 'Funds will arrive via SARIE within 24 hours',
         'success'
       );
     },
-    [sellers, formatPrice, lang, showToast]
+    [currentUser, isDemoMode, sellers, formatPrice, lang, showToast]
   );
 
   // Admin Actions
   const updateSellerStatus = useCallback(
     async (sellerId: string, status: SellerStatus) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
       const target = sellers.find((s) => s.id === sellerId);
       if (!target) return;
       const updated: Seller = {
@@ -1585,46 +2204,63 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         status,
         verifiedBadge: status === 'approved',
       };
-      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
-      try {
-        await setDoc(doc(db, 'sellers', sellerId), updated);
-        await addAuditLog(
-          `تحديث حالة التاجر «${target.nameAr}» إلى (${status === 'approved' ? 'معتمد وموثق' : status === 'suspended' ? 'موقوف مؤقتاً' : 'مرفوض'})`,
-          `Updated seller "${target.nameEn}" status to ${status}`,
-          'seller',
-          sellerId
-        );
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'sellers');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'sellers', sellerId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
+          showToast(lang === 'ar' ? 'تعذر تحديث حالة التاجر' : 'Failed to update seller status', undefined, 'error');
+          return;
+        }
       }
+      setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
+      await addAuditLog(
+        `تحديث حالة التاجر «${target.nameAr}» إلى (${
+          status === 'approved' ? 'معتمد وموثق' : status === 'suspended' ? 'موقوف مؤقتاً' : 'مرفوض'
+        })`,
+        `Updated seller "${target.nameEn}" status to ${status}`,
+        'seller',
+        sellerId
+      );
       showToast(
         lang === 'ar' ? `تم تحديث حالة متجر ${target.nameAr}` : `Updated ${target.nameEn} status`,
         undefined,
         'success'
       );
     },
-    [sellers, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, sellers, addAuditLog, lang, showToast]
   );
 
   const moderateProduct = useCallback(
-    async (productId: string, updates: Partial<Product>, logReasonAr: string, logReasonEn: string) => {
+    async (
+      productId: string,
+      updates: Partial<Product>,
+      logReasonAr: string,
+      logReasonEn: string
+    ) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
       const target = products.find((p) => p.id === productId);
       if (!target) return;
       const updated: Product = { ...target, ...updates };
-      setProducts((prev) => prev.map((p) => (p.id === productId ? updated : p)));
-      try {
-        await setDoc(doc(db, 'products', productId), updated);
-        await addAuditLog(logReasonAr, logReasonEn, 'product', productId);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'products');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'products', productId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'products');
+          showToast(lang === 'ar' ? 'تعذر تحديث المنتج' : 'Failed to moderate product', undefined, 'error');
+          return;
+        }
       }
+      setProducts((prev) => prev.map((p) => (p.id === productId ? updated : p)));
+      await addAuditLog(logReasonAr, logReasonEn, 'product', productId);
       showToast(lang === 'ar' ? logReasonAr : logReasonEn, undefined, 'success');
     },
-    [products, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, products, addAuditLog, lang, showToast]
   );
 
   const processReturnRequest = useCallback(
     async (orderId: string, approve: boolean, adminNote: string) => {
+      if (!currentUser || currentUser.role !== 'admin') return;
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
       const updated: Order = {
@@ -1639,18 +2275,22 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           : undefined,
         updatedAt: new Date().toISOString(),
       };
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
-      try {
-        await setDoc(doc(db, 'orders', orderId), updated);
-        await addAuditLog(
-          `${approve ? 'الموافقة على إرجاع واسترداد مبلغ' : 'رفض طلب إرجاع'} الطلب #${target.orderNumber}`,
-          `${approve ? 'Approved return & refund for' : 'Declined return for'} Order #${target.orderNumber}`,
-          'return',
-          orderId
-        );
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'orders');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'orders', orderId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'orders');
+          showToast(lang === 'ar' ? 'تعذر معالجة طلب الإرجاع' : 'Failed to process return request', undefined, 'error');
+          return;
+        }
       }
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+      await addAuditLog(
+        `${approve ? 'الموافقة على إرجاع واسترداد مبلغ' : 'رفض طلب إرجاع'} الطلب #${target.orderNumber}`,
+        `${approve ? 'Approved return & refund for' : 'Declined return for'} Order #${target.orderNumber}`,
+        'return',
+        orderId
+      );
       showToast(
         lang === 'ar'
           ? approve
@@ -1661,56 +2301,66 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [orders, addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, orders, addAuditLog, lang, showToast]
   );
 
   const updateHomepageConfig = useCallback(
     async (config: HomepageConfig) => {
-      setHomepageConfig(config);
-      try {
-        await setDoc(doc(db, 'settings', 'homepage'), config);
-        await addAuditLog(
-          'تحديث محتوى وبنرات الصفحة الرئيسية لمنصة أثيل',
-          'Updated Atheel Homepage Editorial Hero & Campaign Banners',
-          'homepage',
-          'homepage'
-        );
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'settings');
+      if (!currentUser || currentUser.role !== 'admin') return;
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'settings', 'homepage'), config);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'settings');
+          showToast(lang === 'ar' ? 'تعذر تحديث إعدادات الواجهة' : 'Failed to update homepage settings', undefined, 'error');
+          return;
+        }
       }
+      setHomepageConfig(config);
+      await addAuditLog(
+        'تحديث محتوى وبنرات الصفحة الرئيسية لمنصة أثيل',
+        'Updated Atheel Homepage Editorial Hero & Campaign Banners',
+        'homepage',
+        'homepage'
+      );
       showToast(
         lang === 'ar' ? 'تم تحديث محتوى الصفحة الرئيسية بنجاح' : 'Homepage Content Updated',
         undefined,
         'success'
       );
     },
-    [addAuditLog, lang, showToast]
+    [currentUser, isDemoMode, addAuditLog, lang, showToast]
   );
 
   const answerProductQuestion = useCallback(
     async (questionId: string, answerText: string) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = questions.find((q) => q.id === questionId);
       if (!target) return;
       const updated: ProductQuestion = {
         ...target,
         answerAr: answerText,
         answerEn: answerText,
-        answeredByAr: currentUser?.name || 'إدارة أثيل',
-        answeredByEn: currentUser?.name || 'Atheel Concierge',
+        answeredByAr: currentUser.name || 'إدارة أثيل',
+        answeredByEn: currentUser.name || 'Atheel Concierge',
       };
-      setQuestions((prev) => prev.map((q) => (q.id === questionId ? updated : q)));
-      try {
-        await setDoc(doc(db, 'questions', questionId), updated);
-      } catch (e) {
-        handleFirestoreError(e, OperationType.UPDATE, 'questions');
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'questions', questionId), updated);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'questions');
+          showToast(lang === 'ar' ? 'تعذر نشر الإجابة' : 'Failed to publish answer', undefined, 'error');
+          return;
+        }
       }
+      setQuestions((prev) => prev.map((q) => (q.id === questionId ? updated : q)));
       showToast(
         lang === 'ar' ? 'تم نشر الإجابة على سؤال العميل' : 'Answer Published',
         undefined,
         'success'
       );
     },
-    [questions, currentUser, lang, showToast]
+    [currentUser, isDemoMode, questions, lang, showToast]
   );
 
   const value: MarketplaceContextType = {
@@ -1723,8 +2373,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     navigateTo,
     selectedProductId,
     lastCreatedOrder,
+    pendingRedirectView,
+    setPendingRedirectView,
     currentUser,
+    isAuthLoading,
+    isDemoMode,
+    exitDemoMode,
     loginWithDemoRole,
+    loginWithEmail,
+    registerWithEmail,
+    sendPasswordReset,
     loginWithCredentials,
     loginWithGoogle,
     registerAccount,

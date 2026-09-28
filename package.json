@@ -1,5 +1,6 @@
 {
   "name": "ai-studio-applet",
+  "description": "Atheel Saudi Luxury Multi-Vendor Marketplace",
   "version": "0.1.0",
   "private": true,
   "scripts": {
