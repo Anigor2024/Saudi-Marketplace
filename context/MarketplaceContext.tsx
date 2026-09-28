@@ -1120,6 +1120,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         setSelectedSellerId(params.sellerId);
       }
 
+      if (view === 'checkout' && !publicPlatformSettings.checkoutEnabled) {
+        showToast(
+          lang === 'ar'
+            ? 'إتمام الطلبات متوقف مؤقتاً للصيانة التشغيلية.'
+            : 'Checkout is temporarily unavailable for operational maintenance.',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
       // Require authentication for protected customer, seller, and admin routes
       const protectedViews: AppView[] = [
         'checkout',
@@ -1168,6 +1179,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       currentUser,
       canAccessSellerDashboard,
       canAccessAdminDashboard,
+      publicPlatformSettings.checkoutEnabled,
       lang,
       showToast,
     ]
@@ -1794,11 +1806,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!publicPlatformSettings.checkoutEnabled) {
         showToast(
           lang === 'ar'
-            ? 'إتمام الطلبات متوقف مؤقتاً للصيانة المجدولة'
-            : 'Checkout Temporarily Paused',
-          lang === 'ar'
-            ? 'تقوم إدارة المنصة حالياً بإجراء تحديث تشغيلي سريع. يرجى المحاولة بعد قليل.'
-            : 'Platform checkout is temporarily paused for scheduled operational maintenance.',
+            ? 'إتمام الطلبات متوقف مؤقتاً للصيانة التشغيلية.'
+            : 'Checkout is temporarily unavailable for operational maintenance.',
+          undefined,
           'error'
         );
         return null;
@@ -3430,7 +3440,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         typeof privatePlatformSettings.minimumPayoutAmount === 'number'
           ? privatePlatformSettings.minimumPayoutAmount
           : 500;
-      if (cleanAmount < minPayout) {
+      if (requestableBalance < minPayout || cleanAmount < minPayout) {
         showToast(
           lang === 'ar'
             ? `الحد الأدنى لطلب تسوية الأرباح هو ${formatPrice(minPayout)}`
@@ -4941,7 +4951,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     auditLogs,
     homepageConfig,
     publicPlatformSettings,
-    privatePlatformSettings,
+    privatePlatformSettings:
+      currentUser?.role === 'admin'
+        ? privatePlatformSettings
+        : {
+            ...privatePlatformSettings,
+            internalGovernanceNotesAr: '',
+            internalGovernanceNotesEn: '',
+          },
     isLoadingData,
     searchQuery,
     setSearchQuery,

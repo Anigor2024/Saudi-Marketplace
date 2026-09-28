@@ -37,6 +37,7 @@ import AdminFinanceAndTreasury from '@/components/admin/AdminFinanceAndTreasury'
 import AdminMarketplaceAnalytics from '@/components/admin/AdminMarketplaceAnalytics';
 import AdminAuditLogCenter from '@/components/admin/AdminAuditLogCenter';
 import AdminHomepageCMS from '@/components/admin/AdminHomepageCMS';
+import AdminPlatformSettings from '@/components/admin/AdminPlatformSettings';
 
 export type AdminSectionId =
   | 'overview'
@@ -53,7 +54,7 @@ export type AdminSectionId =
   | 'analytics'
   | 'audit'
   | 'cms'
-  | 'settings-preview';
+  | 'settings';
 
 export function AdminConsole() {
   const {
@@ -436,16 +437,8 @@ export function AdminConsole() {
       labelEn: 'Homepage CMS',
       icon: LayoutTemplate,
     },
-  ];
-
-  const round3BPlaceholders: {
-    id: AdminSectionId;
-    labelAr: string;
-    labelEn: string;
-    icon: React.ComponentType<{ className?: string }>;
-  }[] = [
     {
-      id: 'settings-preview',
+      id: 'settings',
       labelAr: 'إعدادات المنصة والسياسات',
       labelEn: 'Platform Settings',
       icon: Settings,
@@ -553,26 +546,6 @@ export function AdminConsole() {
                 </button>
               );
             })}
-            {round3BPlaceholders.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeSection === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setActiveSection(item.id)}
-                  className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
-                    isActive
-                      ? 'bg-[#141413] text-[#F5E6C8]'
-                      : 'bg-white text-[#8C857B] border border-[#E6E0D6]'
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{lang === 'ar' ? item.labelAr : item.labelEn}</span>
-                  <span className="text-[10px] font-mono">3B.2B</span>
-                </button>
-              );
-            })}
           </div>
         </div>
 
@@ -620,42 +593,6 @@ export function AdminConsole() {
                         {item.badge}
                       </span>
                     )}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Governance & Future Round 3B.2B Module */}
-            <div className="bg-white rounded-2xl border border-[#E6E0D6] p-3.5 shadow-xs space-y-1">
-              <div className="px-3 py-2 flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-[#8C857B]">
-                  {t('إعدادات النظام (المرحلة القادمة)', 'Platform Config (Next Phase)')}
-                </span>
-                <span className="px-1.5 py-0.5 rounded bg-[#FAF8F5] border border-[#E6E0D6] text-[10px] font-mono text-[#8C857B]">
-                  3B.2B
-                </span>
-              </div>
-              {round3BPlaceholders.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeSection === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setActiveSection(item.id)}
-                    className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
-                      isActive
-                        ? 'bg-[#141413] text-[#F5E6C8]'
-                        : 'text-[#57534E] hover:bg-[#FAF8F5]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 truncate">
-                      <Icon className="w-4 h-4 shrink-0 text-[#8C857B]" />
-                      <span className="truncate">
-                        {lang === 'ar' ? item.labelAr : item.labelEn}
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-mono text-[#8C857B]">3B.2B</span>
                   </button>
                 );
               })}
@@ -1202,42 +1139,9 @@ export function AdminConsole() {
             {activeSection === 'cms' && <AdminHomepageCMS />}
 
             {/* ==================================================
-                PLATFORM SETTINGS PLACEHOLDER (SCHEDULED FOR NEXT PHASE)
+                SECTION 15: PLATFORM SETTINGS & OPERATIONAL GOVERNANCE
             ================================================== */}
-            {activeSection === 'settings-preview' && (
-              <div className="bg-white rounded-2xl border border-[#E6E0D6] p-8 shadow-xs space-y-4">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-[#FBF7EC] border border-[#C59B27]/40 text-xs font-bold text-[#141413]">
-                  <Sparkles className="w-4 h-4 text-[#C59B27]" />
-                  <span>
-                    {t(
-                      'مجدول للمرحلة القادمة (Platform Settings)',
-                      'Scheduled for Next Phase (Platform Settings)'
-                    )}
-                  </span>
-                </div>
-                <h2 className="text-xl font-bold text-[#141413]">
-                  {t(
-                    'إعدادات المنصة والسياسات الضريبية',
-                    'Platform Configuration & Tax Governance'
-                  )}
-                </h2>
-                <p className="text-xs text-[#57534E] leading-relaxed max-w-2xl">
-                  {t(
-                    'هذه الوحدة مخصصة للمرحلة القادمة لإدارة إعدادات السياسات العامة للمنصة والضوابط التشغيلية.',
-                    'This module is reserved for the next phase to manage platform-wide governance settings and operational policies.'
-                  )}
-                </p>
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setActiveSection('overview')}
-                    className="px-4 py-2 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold"
-                  >
-                    {t('العودة للنظرة التنفيذية', 'Return to Executive Overview')}
-                  </button>
-                </div>
-              </div>
-            )}
+            {activeSection === 'settings' && <AdminPlatformSettings />}
           </div>
         </div>
       </div>

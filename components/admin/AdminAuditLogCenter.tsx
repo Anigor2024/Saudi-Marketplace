@@ -142,6 +142,16 @@ export default function AdminAuditLogCenter() {
             }
           : { labelAr: `استفسار #${log.targetId}`, labelEn: `Question #${log.targetId}` };
       }
+      case 'settings':
+        return log.targetId === 'privatePlatformSettings'
+          ? {
+              labelAr: 'إعدادات الحوكمة الداخلية للمنصة (privatePlatformSettings)',
+              labelEn: 'Internal Governance Settings (privatePlatformSettings)',
+            }
+          : {
+              labelAr: 'الإعدادات العامة للمنصة والشحن (publicPlatformSettings)',
+              labelEn: 'Public Platform & Shipping Settings (publicPlatformSettings)',
+            };
       case 'homepage':
       default:
         return {
@@ -238,6 +248,7 @@ export default function AdminAuditLogCenter() {
     { id: 'review', ar: 'التقييمات (review)', en: 'Reviews (review)' },
     { id: 'question', ar: 'الأسئلة (question)', en: 'Questions (question)' },
     { id: 'homepage', ar: 'واجهة المتجر (homepage)', en: 'Homepage (homepage)' },
+    { id: 'settings', ar: 'إعدادات المنصة (settings)', en: 'Platform Settings (settings)' },
   ];
 
   const getRoleLabel = (role: UserRole) => {

@@ -540,10 +540,11 @@ export default function AdminMarketplaceAnalytics() {
       )
       .slice(0, 8);
 
-    // Low Stock High Demand: positive stock <= lowStockThreshold (or 5), sorted by demand
+    // Low Stock High Demand: positive stock <= lowStockThreshold (or 5), excluding out_of_stock, sorted by demand
     const lowStockHighDemand = [...productStats]
       .filter(
         (stat) =>
+          stat.product.status !== 'out_of_stock' &&
           safeNumber(stat.product.stock) > 0 &&
           safeNumber(stat.product.stock) <=
             safeNumber(stat.product.lowStockThreshold, 5)
@@ -799,11 +800,12 @@ export default function AdminMarketplaceAnalytics() {
       (p) => p.status === 'suspended'
     ).length;
     const draftProducts = products.filter((p) => p.status === 'draft').length;
-    const criticalStockSkus = products.filter(
-      (p) =>
-        safeNumber(p.stock) > 0 &&
-        safeNumber(p.stock) <= safeNumber(p.lowStockThreshold, 5)
-    ).length;
+    const criticalStockSkus = products.filter((p) => {
+      if (p.status === 'out_of_stock' || safeNumber(p.stock) <= 0) return false;
+      const threshold = safeNumber(p.lowStockThreshold, 5);
+      const criticalLimit = Math.max(1, Math.floor(threshold / 2));
+      return safeNumber(p.stock) > 0 && safeNumber(p.stock) <= criticalLimit;
+    }).length;
     const outOfStockProducts = products.filter(
       (p) => p.status === 'out_of_stock' || safeNumber(p.stock) <= 0
     ).length;

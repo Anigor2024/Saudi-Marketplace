@@ -105,7 +105,7 @@ export function HomeView() {
   }, [activeProducts, interestTab]);
 
   const seasonalProducts = useMemo(
-    () => activeProducts.filter((p) => p.isSeasonal || p.discountPercent >= 12).slice(0, 4),
+    () => activeProducts.filter((p) => p.isSeasonal).slice(0, 4),
     [activeProducts]
   );
 

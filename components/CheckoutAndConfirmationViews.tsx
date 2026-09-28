@@ -53,6 +53,7 @@ export function CheckoutView() {
     removeCoupon,
     saveAddress,
     placeOrder,
+    publicPlatformSettings,
   } = useMarketplace();
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
@@ -99,9 +100,14 @@ export function CheckoutView() {
 
   // Derived VAT-Inclusive Checkout Math (Phase 7)
   const effectiveShippingFee = useMemo(() => {
-    if (deliverySpeed === 'express') return 35;
+    if (deliverySpeed === 'express') {
+      return typeof publicPlatformSettings.expressShippingFee === 'number' &&
+        publicPlatformSettings.expressShippingFee >= 0
+        ? publicPlatformSettings.expressShippingFee
+        : 35;
+    }
     return cartSummary.shippingFee;
-  }, [deliverySpeed, cartSummary.shippingFee]);
+  }, [deliverySpeed, cartSummary.shippingFee, publicPlatformSettings.expressShippingFee]);
 
   const finalTotal = useMemo(() => {
     return Number((cartSummary.netAfterDiscount + effectiveShippingFee).toFixed(2));
@@ -332,6 +338,31 @@ export function CheckoutView() {
           </div>
         )}
       </div>
+
+      {/* Checkout Disabled Operational Maintenance Warning */}
+      {!publicPlatformSettings.checkoutEnabled && (
+        <div
+          role="alert"
+          className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 flex items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-2.5 text-xs font-bold">
+            <AlertCircle className="w-5 h-5 text-amber-700 shrink-0" />
+            <span>
+              {t(
+                'إتمام الطلبات متوقف مؤقتاً للصيانة التشغيلية.',
+                'Checkout is temporarily unavailable for operational maintenance.'
+              )}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigateTo('cart')}
+            className="px-3.5 py-1.5 rounded-xl bg-white border border-amber-300 text-xs font-bold text-amber-900 hover:bg-amber-100 shrink-0"
+          >
+            {t('العودة لحقيبة التسوق', 'Return to Cart')}
+          </button>
+        </div>
+      )}
 
       {/* 4-Step Progress Bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -738,7 +769,12 @@ export function CheckoutView() {
                   </div>
                   <div className="text-end shrink-0">
                     <span className="text-sm font-bold font-mono text-[#141413]">
-                      {formatPrice(35)}
+                      {formatPrice(
+                        typeof publicPlatformSettings.expressShippingFee === 'number' &&
+                          publicPlatformSettings.expressShippingFee >= 0
+                          ? publicPlatformSettings.expressShippingFee
+                          : 35
+                      )}
                     </span>
                     <div className="text-[10px] text-[#8C857B]">
                       {t('شامل الضريبة ١٥٪', 'Incl. 15% VAT')}
@@ -1071,7 +1107,7 @@ export function CheckoutView() {
                 </button>
                 <button
                   type="button"
-                  disabled={isPlacingOrder}
+                  disabled={isPlacingOrder || !publicPlatformSettings.checkoutEnabled}
                   onClick={handlePlaceFinalOrder}
                   className="px-8 py-4 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] disabled:opacity-60 text-white text-sm font-bold inline-flex items-center gap-2.5 shadow-md transition-all"
                 >

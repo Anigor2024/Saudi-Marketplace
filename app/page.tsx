@@ -97,6 +97,7 @@ function MarketplaceShell() {
     submitQuestion,
     toasts,
     dismissToast,
+    publicPlatformSettings,
   } = useMarketplace();
 
   const [couponInput, setCouponInput] = useState('');
@@ -591,91 +592,111 @@ function MarketplaceShell() {
                   </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    {/* Add Review Form */}
-                    <form
-                      onSubmit={async (e) => {
-                        e.preventDefault();
-                        if (!reviewComment.trim()) return;
-                        setIsSubmittingReview(true);
-                        await submitReview(
-                          currentProduct.id,
-                          reviewRating,
-                          reviewTitle.trim() ||
-                            (lang === 'ar' ? 'تجربة اقتناء مميزة' : 'Great Luxury Experience'),
-                          reviewComment.trim()
-                        );
-                        setIsSubmittingReview(false);
-                        setReviewTitle('');
-                        setReviewComment('');
-                      }}
-                      className="lg:col-span-5 p-5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-3.5 self-start"
-                    >
-                      <h3 className="text-sm font-bold text-[#141413]">
-                        {t('أضف تقييمك لهذا المنتج', 'Write a Product Review')}
-                      </h3>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#141413] mb-1">
-                          {t('درجة التقييم', 'Rating')}
-                        </label>
-                        <div className="flex items-center gap-1.5">
-                          {[1, 2, 3, 4, 5].map((num) => (
-                            <button
-                              key={num}
-                              type="button"
-                              onClick={() => setReviewRating(num)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border ${
-                                reviewRating >= num
-                                  ? 'bg-[#C59B27] text-[#141413] border-[#C59B27]'
-                                  : 'bg-white text-[#8C857B] border-[#E6E0D6]'
-                              }`}
-                            >
-                              {num} ★
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#141413] mb-1">
-                          {t('عنوان التقييم', 'Review Title')}
-                        </label>
-                        <input
-                          type="text"
-                          value={reviewTitle}
-                          onChange={(e) => setReviewTitle(e.target.value)}
-                          placeholder={t('مثال: جودة استثنائية وتغليف ملكي', 'Review headline')}
-                          className="w-full px-3 py-2 rounded-xl bg-white border border-[#E6E0D6] text-xs"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-[#141413] mb-1">
-                          {t('تفاصيل تجربتك', 'Your Review Comment')}
-                        </label>
-                        <textarea
-                          rows={3}
-                          required
-                          value={reviewComment}
-                          onChange={(e) => setReviewComment(e.target.value)}
-                          placeholder={t(
-                            'شارك رأيك حول جودة المنتج ومطابقته للمواصفات...',
-                            'Share your thoughts on product quality and authenticity...'
-                          )}
-                          className="w-full px-3 py-2 rounded-xl bg-white border border-[#E6E0D6] text-xs"
-                        />
-                      </div>
-
-                      <button
-                        type="submit"
-                        disabled={isSubmittingReview}
-                        className="w-full py-2.5 px-4 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] disabled:opacity-60 text-white text-xs font-bold"
+                    {/* Add Review Form (gated by publicPlatformSettings.customerReviewsEnabled) */}
+                    {publicPlatformSettings.customerReviewsEnabled ? (
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (!reviewComment.trim()) return;
+                          setIsSubmittingReview(true);
+                          await submitReview(
+                            currentProduct.id,
+                            reviewRating,
+                            reviewTitle.trim() ||
+                              (lang === 'ar' ? 'تجربة اقتناء مميزة' : 'Great Luxury Experience'),
+                            reviewComment.trim()
+                          );
+                          setIsSubmittingReview(false);
+                          setReviewTitle('');
+                          setReviewComment('');
+                        }}
+                        className="lg:col-span-5 p-5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-3.5 self-start"
                       >
-                        {isSubmittingReview
-                          ? t('جاري النشر...', 'Publishing...')
-                          : t('نشر التقييم الآن', 'Publish Review')}
-                      </button>
-                    </form>
+                        <h3 className="text-sm font-bold text-[#141413]">
+                          {t('أضف تقييمك لهذا المنتج', 'Write a Product Review')}
+                        </h3>
+
+                        <div>
+                          <label className="block text-xs font-bold text-[#141413] mb-1">
+                            {t('درجة التقييم', 'Rating')}
+                          </label>
+                          <div className="flex items-center gap-1.5">
+                            {[1, 2, 3, 4, 5].map((num) => (
+                              <button
+                                key={num}
+                                type="button"
+                                onClick={() => setReviewRating(num)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border ${
+                                  reviewRating >= num
+                                    ? 'bg-[#C59B27] text-[#141413] border-[#C59B27]'
+                                    : 'bg-white text-[#8C857B] border-[#E6E0D6]'
+                                }`}
+                              >
+                                {num} ★
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-[#141413] mb-1">
+                            {t('عنوان التقييم', 'Review Title')}
+                          </label>
+                          <input
+                            type="text"
+                            value={reviewTitle}
+                            onChange={(e) => setReviewTitle(e.target.value)}
+                            placeholder={t('مثال: جودة استثنائية وتغليف ملكي', 'Review headline')}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-[#E6E0D6] text-xs"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-[#141413] mb-1">
+                            {t('تفاصيل تجربتك', 'Your Review Comment')}
+                          </label>
+                          <textarea
+                            rows={3}
+                            required
+                            value={reviewComment}
+                            onChange={(e) => setReviewComment(e.target.value)}
+                            placeholder={t(
+                              'شارك رأيك حول جودة المنتج ومطابقته للمواصفات...',
+                              'Share your thoughts on product quality and authenticity...'
+                            )}
+                            className="w-full px-3 py-2 rounded-xl bg-white border border-[#E6E0D6] text-xs"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={isSubmittingReview}
+                          className="w-full py-2.5 px-4 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] disabled:opacity-60 text-white text-xs font-bold"
+                        >
+                          {isSubmittingReview
+                            ? t('جاري النشر...', 'Publishing...')
+                            : t('نشر التقييم الآن', 'Publish Review')}
+                        </button>
+                      </form>
+                    ) : (
+                      <div className="lg:col-span-5 p-5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-2 self-start">
+                        <div className="flex items-center gap-2 text-xs font-bold text-[#B45309]">
+                          <Lock className="w-4 h-4 shrink-0" />
+                          <span>
+                            {t(
+                              'إضافة التقييمات الجديدة متوقفة مؤقتاً',
+                              'New Review Submissions Temporarily Paused'
+                            )}
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#57534E] leading-relaxed">
+                          {t(
+                            'تظل جميع التقييمات السابقة متاحة للاطلاع، بينما تم إيقاف استقبال تقييمات جديدة مؤقتاً من إعدادات المنصة.',
+                            'Existing verified reviews remain visible while new review submissions are temporarily paused by platform settings.'
+                          )}
+                        </p>
+                      </div>
+                    )}
 
                     {/* Existing Product Reviews List */}
                     <div className="lg:col-span-7 space-y-3">
@@ -768,26 +789,35 @@ function MarketplaceShell() {
                         )}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
-                      <input
-                        type="text"
-                        value={questionInput}
-                        onChange={(e) => setQuestionInput(e.target.value)}
-                        placeholder={t('اكتب سؤالك هنا عن المنتج...', 'Write your question about this product...')}
-                        className="flex-1 sm:w-72 px-3.5 py-2 rounded-xl border border-[#E6E0D6] bg-[#FAF8F5] text-xs focus:outline-none focus:border-[#0B4F3F]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!questionInput.trim()) return;
-                          submitQuestion(currentProduct.id, questionInput.trim());
-                          setQuestionInput('');
-                        }}
-                        className="px-4 py-2 rounded-xl bg-[#0B4F3F] hover:bg-[#083D30] text-white text-xs font-bold transition-all shrink-0"
-                      >
-                        {t('إرسال السؤال', 'Ask Boutique')}
-                      </button>
-                    </div>
+                    {publicPlatformSettings.productQuestionsEnabled ? (
+                      <div className="flex items-center gap-2 w-full sm:w-auto">
+                        <input
+                          type="text"
+                          value={questionInput}
+                          onChange={(e) => setQuestionInput(e.target.value)}
+                          placeholder={t('اكتب سؤالك هنا عن المنتج...', 'Write your question about this product...')}
+                          className="flex-1 sm:w-72 px-3.5 py-2 rounded-xl border border-[#E6E0D6] bg-[#FAF8F5] text-xs focus:outline-none focus:border-[#0B4F3F]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!questionInput.trim()) return;
+                            submitQuestion(currentProduct.id, questionInput.trim());
+                            setQuestionInput('');
+                          }}
+                          className="px-4 py-2 rounded-xl bg-[#0B4F3F] hover:bg-[#083D30] text-white text-xs font-bold transition-all shrink-0"
+                        >
+                          {t('إرسال السؤال', 'Ask Boutique')}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-[11px] font-bold text-[#B45309]">
+                        {t(
+                          'إرسال الأسئلة الجديدة متوقف مؤقتاً (الأجوبة السابقة متاحة أدناه)',
+                          'New Q&A submissions paused (existing Q&A visible below)'
+                        )}
+                      </span>
+                    )}
                   </div>
 
                   <div className="space-y-3">
@@ -1039,10 +1069,23 @@ function MarketplaceShell() {
                           </div>
                         </div>
 
+                        {!publicPlatformSettings.checkoutEnabled && (
+                          <div
+                            role="alert"
+                            className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-xs font-semibold"
+                          >
+                            {t(
+                              'إتمام الطلبات متوقف مؤقتاً للصيانة التشغيلية.',
+                              'Checkout is temporarily unavailable for operational maintenance.'
+                            )}
+                          </div>
+                        )}
+
                         <button
                           type="button"
+                          disabled={!publicPlatformSettings.checkoutEnabled}
                           onClick={() => navigateTo('checkout')}
-                          className="w-full py-3.5 px-5 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-xs"
+                          className="w-full py-3.5 px-5 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors shadow-xs"
                         >
                           <Lock className="w-3.5 h-3.5 text-[#C59B27]" />
                           <span>
@@ -1213,14 +1256,26 @@ function MarketplaceShell() {
                           </div>
                           <button
                             type="button"
+                            disabled={!publicPlatformSettings.sellerApplicationsEnabled}
                             onClick={() => setShowSellerAppForm(!showSellerAppForm)}
-                            className="px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#C59B27]/50 text-xs font-bold text-[#141413]"
+                            className="px-3.5 py-2 rounded-xl bg-[#FAF8F5] border border-[#C59B27]/50 disabled:opacity-50 text-xs font-bold text-[#141413]"
                           >
-                            {t('تقديم طلب تاجر', 'Apply as Seller')}
+                            {publicPlatformSettings.sellerApplicationsEnabled
+                              ? t('تقديم طلب تاجر', 'Apply as Seller')
+                              : t('التسجيل متوقف مؤقتاً', 'Applications Paused')}
                           </button>
                         </div>
 
-                        {showSellerAppForm && (
+                        {!publicPlatformSettings.sellerApplicationsEnabled && (
+                          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-[11px] font-semibold text-[#B45309]">
+                            {t(
+                              'استقبال طلبات انضمام التجار الجدد متوقف مؤقتاً من قِبل الإدارة.',
+                              'New seller onboarding applications are temporarily paused by platform administration.'
+                            )}
+                          </div>
+                        )}
+
+                        {showSellerAppForm && publicPlatformSettings.sellerApplicationsEnabled && (
                           <form
                             onSubmit={handleSellerApplicationSubmit}
                             className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-3"
@@ -1791,7 +1846,9 @@ function MarketplaceShell() {
                   <Crown className="w-4 h-4 text-[#C59B27]" />
                 </div>
                 <span className="text-xl font-bold text-white">
-                  {lang === 'ar' ? 'أثـيـل' : 'ATHEEL'}
+                  {lang === 'ar'
+                    ? publicPlatformSettings.marketplaceNameAr || 'أثـيـل'
+                    : publicPlatformSettings.marketplaceNameEn || 'ATHEEL'}
                 </span>
               </div>
               <p className="text-xs text-[#D6D0C4] leading-relaxed">
@@ -1800,6 +1857,17 @@ function MarketplaceShell() {
                   'Atheel Saudi Luxury Multi-Vendor Marketplace. Bringing together verified Saudi boutiques and authentic global maisons.'
                 )}
               </p>
+              <div className="pt-1 space-y-1 text-[11px] text-[#D6D0C4]">
+                <div className="font-mono">{publicPlatformSettings.supportEmail}</div>
+                <div className="font-mono" dir="ltr">
+                  {publicPlatformSettings.supportPhone} · WhatsApp: {publicPlatformSettings.supportWhatsapp}
+                </div>
+                <div className="text-[#8C857B]">
+                  {lang === 'ar'
+                    ? publicPlatformSettings.supportHoursAr
+                    : publicPlatformSettings.supportHoursEn}
+                </div>
+              </div>
             </div>
 
             <div>

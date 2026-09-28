@@ -67,6 +67,7 @@ export function NavbarAndMegaMenu() {
     compareIds,
     notifications,
     markAllNotificationsRead,
+    publicPlatformSettings,
   } = useMarketplace();
 
   const [selectedCity, setSelectedCity] = useState(SAUDI_CITIES[0]);
@@ -128,6 +129,38 @@ export function NavbarAndMegaMenu() {
 
   return (
     <>
+      {/* Storefront Maintenance Banner (never blocks Admin Console access) */}
+      {publicPlatformSettings.maintenanceBannerActive &&
+        (publicPlatformSettings.maintenanceBannerAr ||
+          publicPlatformSettings.maintenanceBannerEn) && (
+          <div
+            role="status"
+            className="bg-amber-600 text-white text-xs border-b border-amber-500/40"
+          >
+            <div className="max-w-[1440px] mx-auto px-4 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 font-semibold">
+                <ShieldCheck className="w-4 h-4 text-[#F5E6C8] shrink-0" />
+                <span>
+                  {lang === 'ar'
+                    ? publicPlatformSettings.maintenanceBannerAr ||
+                      publicPlatformSettings.maintenanceBannerEn
+                    : publicPlatformSettings.maintenanceBannerEn ||
+                      publicPlatformSettings.maintenanceBannerAr}
+                </span>
+              </div>
+              {canAccessAdminDashboard && activeView !== 'admin-dashboard' && (
+                <button
+                  type="button"
+                  onClick={() => navigateTo('admin-dashboard')}
+                  className="px-2.5 py-0.5 rounded bg-white/15 hover:bg-white/25 text-[11px] font-bold transition-colors"
+                >
+                  {t('إدارة التنبيه من الإعدادات', 'Manage in Admin Settings')}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
       {/* TOP BAR: Role Switcher + Saudi City + Language + VAT Notice */}
       <div className="bg-[#141413] text-[#FAF8F5] text-xs border-b border-white/10">
         <div className="max-w-[1440px] mx-auto px-4 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-2">
@@ -263,7 +296,9 @@ export function NavbarAndMegaMenu() {
               <div>
                 <div className="flex items-baseline gap-2">
                   <span className="text-2xl font-bold tracking-tight text-[#141413]">
-                    {lang === 'ar' ? 'أثـيـل' : 'ATHEEL'}
+                    {lang === 'ar'
+                      ? publicPlatformSettings.marketplaceNameAr || 'أثـيـل'
+                      : publicPlatformSettings.marketplaceNameEn || 'ATHEEL'}
                   </span>
                   <span className="text-[10px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-[#FBF7EC] text-[#B8860B] border border-[#C59B27]/30 font-semibold">
                     {lang === 'ar' ? 'السعودية' : 'KSA LUXURY'}

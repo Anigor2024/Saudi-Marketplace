@@ -46,8 +46,15 @@ export default function SellerFinanceAndProfile({
     tickets,
     updateSellerProfile,
     requestSellerPayout,
+    privatePlatformSettings,
     showToast,
   } = useMarketplace();
+
+  const minimumPayoutAmount =
+    typeof privatePlatformSettings?.minimumPayoutAmount === 'number' &&
+    privatePlatformSettings.minimumPayoutAmount >= 0
+      ? privatePlatformSettings.minimumPayoutAmount
+      : 500;
 
   // ============================================================================
   // 1. PAYOUT RESERVATION & REQUEST STATE
@@ -358,8 +365,15 @@ export default function SellerFinanceAndProfile({
       }
     };
 
+    const isBalanceBelowMinimum = requestableBalance < minimumPayoutAmount;
+    const isAmountBelowMinimum =
+      !isBalanceBelowMinimum && payoutAmount > 0 && payoutAmount < minimumPayoutAmount;
     const isAmountOverRequestable = payoutAmount > requestableBalance;
-    const isPayoutDisabled = payoutAmount <= 0 || payoutAmount > requestableBalance;
+    const isPayoutDisabled =
+      isBalanceBelowMinimum ||
+      payoutAmount <= 0 ||
+      payoutAmount < minimumPayoutAmount ||
+      payoutAmount > requestableBalance;
 
     return (
       <div className="space-y-6">
@@ -419,9 +433,15 @@ export default function SellerFinanceAndProfile({
                 </div>
               </div>
 
-              <div className="text-[11px] text-[#C59B27] font-mono">
-                {t('موعد دورة التسوية القادمة:', 'Next Scheduled Settlement Cycle:')}{' '}
-                {seller.nextPayoutDate}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#C59B27] font-mono">
+                <span>
+                  {t('موعد دورة التسوية القادمة:', 'Next Scheduled Settlement Cycle:')}{' '}
+                  {seller.nextPayoutDate}
+                </span>
+                <span>
+                  {t('الحد الأدنى لطلب التسوية:', 'Minimum Payout Threshold:')}{' '}
+                  {formatPrice(minimumPayoutAmount)}
+                </span>
               </div>
             </div>
 
@@ -457,16 +477,43 @@ export default function SellerFinanceAndProfile({
                 </div>
                 <input
                   type="number"
-                  min={requestableBalance > 0 ? 1 : 0}
+                  min={requestableBalance >= minimumPayoutAmount ? minimumPayoutAmount : 0}
                   max={requestableBalance}
+                  disabled={isBalanceBelowMinimum}
                   value={payoutAmount}
                   onChange={(e) => setPayoutAmount(Math.max(0, Number(e.target.value) || 0))}
-                  className={`w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border text-sm font-mono font-bold ${
-                    isAmountOverRequestable
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border text-sm font-mono font-bold disabled:opacity-50 ${
+                    isAmountOverRequestable || isAmountBelowMinimum || isBalanceBelowMinimum
                       ? 'border-[#9E2A2B] text-[#9E2A2B]'
                       : 'border-[#E6E0D6] text-[#0B4F3F]'
                   }`}
                 />
+                {isBalanceBelowMinimum && (
+                  <p className="text-[11px] font-semibold text-[#9E2A2B] mt-1">
+                    {t(
+                      `الرصيد القابل للطلب حالياً (${formatPrice(
+                        requestableBalance
+                      )}) أقل من الحد الأدنى المعتمد لطلب تسوية الأرباح (${formatPrice(
+                        minimumPayoutAmount
+                      )}). لا يمكن رفع طلب تسوية حتى يبلغ الرصيد الحد الأدنى.`,
+                      `Currently requestable balance (${formatPrice(
+                        requestableBalance
+                      )}) is below the minimum payout threshold (${formatPrice(
+                        minimumPayoutAmount
+                      )}). Payout submission is disabled until the minimum threshold is met.`
+                    )}
+                  </p>
+                )}
+                {isAmountBelowMinimum && (
+                  <p className="text-[11px] font-semibold text-[#9E2A2B] mt-1">
+                    {t(
+                      `الحد الأدنى المعتمد لطلب تسوية الخزينة هو ${formatPrice(minimumPayoutAmount)}.`,
+                      `Minimum required treasury payout request amount is ${formatPrice(
+                        minimumPayoutAmount
+                      )}.`
+                    )}
+                  </p>
+                )}
                 {isAmountOverRequestable && (
                   <p className="text-[11px] font-semibold text-[#9E2A2B] mt-1">
                     {t(
