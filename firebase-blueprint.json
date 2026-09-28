@@ -247,6 +247,81 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "ticketNumber", "userId", "subject", "message", "status", "createdAt"]
+    },
+    "HomepageConfig": {
+      "title": "HomepageConfig",
+      "description": "Public storefront homepage hero, secondary/seasonal banners, flash deal visibility, and free shipping threshold",
+      "type": "object",
+      "properties": {
+        "heroBadgeAr": { "type": "string" },
+        "heroBadgeEn": { "type": "string" },
+        "heroTitleAr": { "type": "string" },
+        "heroTitleEn": { "type": "string" },
+        "heroSubtitleAr": { "type": "string" },
+        "heroSubtitleEn": { "type": "string" },
+        "heroCtaAr": { "type": "string" },
+        "heroCtaEn": { "type": "string" },
+        "heroSecondaryBannerTitleAr": { "type": "string" },
+        "heroSecondaryBannerTitleEn": { "type": "string" },
+        "seasonalBannerTitleAr": { "type": "string" },
+        "seasonalBannerTitleEn": { "type": "string" },
+        "seasonalBannerSubtitleAr": { "type": "string" },
+        "seasonalBannerSubtitleEn": { "type": "string" },
+        "flashDealsActive": { "type": "boolean" },
+        "freeShippingThreshold": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["heroTitleAr", "heroTitleEn", "flashDealsActive", "freeShippingThreshold"]
+    },
+    "PublicPlatformSettings": {
+      "title": "PublicPlatformSettings",
+      "description": "Public storefront operational settings, support contacts, shipping fees, and storefront feature flags",
+      "type": "object",
+      "properties": {
+        "marketplaceNameAr": { "type": "string" },
+        "marketplaceNameEn": { "type": "string" },
+        "supportEmail": { "type": "string" },
+        "supportPhone": { "type": "string" },
+        "supportWhatsapp": { "type": "string" },
+        "supportHoursAr": { "type": "string" },
+        "supportHoursEn": { "type": "string" },
+        "defaultLanguage": { "type": "string", "enum": ["ar", "en"] },
+        "currencyCode": { "type": "string", "enum": ["SAR"] },
+        "vatRatePercent": { "type": "number" },
+        "vatInclusivePricing": { "type": "boolean" },
+        "freeShippingThreshold": { "type": "number" },
+        "standardShippingFee": { "type": "number" },
+        "expressShippingFee": { "type": "number" },
+        "maintenanceBannerActive": { "type": "boolean" },
+        "maintenanceBannerAr": { "type": "string" },
+        "maintenanceBannerEn": { "type": "string" },
+        "checkoutEnabled": { "type": "boolean" },
+        "sellerApplicationsEnabled": { "type": "boolean" },
+        "customerReviewsEnabled": { "type": "boolean" },
+        "productQuestionsEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["marketplaceNameAr", "marketplaceNameEn", "supportEmail", "currencyCode", "vatRatePercent", "freeShippingThreshold", "standardShippingFee", "expressShippingFee", "checkoutEnabled"]
+    },
+    "PrivatePlatformSettings": {
+      "title": "PrivatePlatformSettings",
+      "description": "Admin-only private governance settings, commission defaults, payout SLA, and internal policies",
+      "type": "object",
+      "properties": {
+        "defaultSellerCommissionRate": { "type": "number" },
+        "minimumPayoutAmount": { "type": "number" },
+        "payoutSlaBusinessDays": { "type": "number" },
+        "requireVerifiedBadgeForFeatured": { "type": "boolean" },
+        "autoApproveVerifiedSellerProducts": { "type": "boolean" },
+        "returnWindowDays": { "type": "number" },
+        "allowOriginalPaymentRefunds": { "type": "boolean" },
+        "lowStockGlobalDefaultThreshold": { "type": "number" },
+        "internalGovernanceNotesAr": { "type": "string" },
+        "internalGovernanceNotesEn": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["defaultSellerCommissionRate", "minimumPayoutAmount", "payoutSlaBusinessDays", "returnWindowDays", "updatedAt", "updatedBy"]
     }
   },
   "firestore": {
@@ -282,9 +357,17 @@
       "schema": { "$ref": "#/entities/AuditLog" },
       "description": "Admin and seller audit trail"
     },
-    "/settings/{settingId}": {
-      "schema": { "$ref": "#/entities/AuditLog" },
-      "description": "Homepage configuration and global marketplace settings"
+    "/settings/homepageConfig": {
+      "schema": { "$ref": "#/entities/HomepageConfig" },
+      "description": "Publicly readable storefront homepage configuration; Admin-only write"
+    },
+    "/settings/publicPlatformSettings": {
+      "schema": { "$ref": "#/entities/PublicPlatformSettings" },
+      "description": "Publicly readable storefront operational settings and feature flags; Admin-only write"
+    },
+    "/settings/privatePlatformSettings": {
+      "schema": { "$ref": "#/entities/PrivatePlatformSettings" },
+      "description": "Admin-only private governance settings; strictly unreadable by non-admin clients"
     },
     "/questions/{questionId}": {
       "schema": { "$ref": "#/entities/ProductQuestion" },

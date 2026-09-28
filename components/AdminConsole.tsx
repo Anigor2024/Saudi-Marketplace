@@ -36,6 +36,7 @@ import AdminPromotionsSupportModeration from '@/components/admin/AdminPromotions
 import AdminFinanceAndTreasury from '@/components/admin/AdminFinanceAndTreasury';
 import AdminMarketplaceAnalytics from '@/components/admin/AdminMarketplaceAnalytics';
 import AdminAuditLogCenter from '@/components/admin/AdminAuditLogCenter';
+import AdminHomepageCMS from '@/components/admin/AdminHomepageCMS';
 
 export type AdminSectionId =
   | 'overview'
@@ -51,7 +52,7 @@ export type AdminSectionId =
   | 'finance'
   | 'analytics'
   | 'audit'
-  | 'cms-preview'
+  | 'cms'
   | 'settings-preview';
 
 export function AdminConsole() {
@@ -429,6 +430,12 @@ export function AdminConsole() {
       badge: auditLogs.length || undefined,
       badgeTone: 'emerald',
     },
+    {
+      id: 'cms',
+      labelAr: 'إدارة الواجهة التسويقية (CMS)',
+      labelEn: 'Homepage CMS',
+      icon: LayoutTemplate,
+    },
   ];
 
   const round3BPlaceholders: {
@@ -437,12 +444,6 @@ export function AdminConsole() {
     labelEn: string;
     icon: React.ComponentType<{ className?: string }>;
   }[] = [
-    {
-      id: 'cms-preview',
-      labelAr: 'إدارة الواجهة التسويقية (CMS)',
-      labelEn: 'Homepage CMS',
-      icon: LayoutTemplate,
-    },
     {
       id: 'settings-preview',
       labelAr: 'إعدادات المنصة والسياسات',
@@ -568,7 +569,7 @@ export function AdminConsole() {
                 >
                   <Icon className="w-3.5 h-3.5" />
                   <span>{lang === 'ar' ? item.labelAr : item.labelEn}</span>
-                  <span className="text-[10px] font-mono">3B.2</span>
+                  <span className="text-[10px] font-mono">3B.2B</span>
                 </button>
               );
             })}
@@ -624,14 +625,14 @@ export function AdminConsole() {
               })}
             </div>
 
-            {/* Governance & Future Round 3B.2 Modules */}
+            {/* Governance & Future Round 3B.2B Module */}
             <div className="bg-white rounded-2xl border border-[#E6E0D6] p-3.5 shadow-xs space-y-1">
               <div className="px-3 py-2 flex items-center justify-between">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[#8C857B]">
-                  {t('الواجهة وإعدادات النظام (3B.2)', 'CMS & Platform Config (3B.2)')}
+                  {t('إعدادات النظام (المرحلة القادمة)', 'Platform Config (Next Phase)')}
                 </span>
                 <span className="px-1.5 py-0.5 rounded bg-[#FAF8F5] border border-[#E6E0D6] text-[10px] font-mono text-[#8C857B]">
-                  3B.2
+                  3B.2B
                 </span>
               </div>
               {round3BPlaceholders.map((item) => {
@@ -654,7 +655,7 @@ export function AdminConsole() {
                         {lang === 'ar' ? item.labelAr : item.labelEn}
                       </span>
                     </div>
-                    <span className="text-[10px] font-mono text-[#8C857B]">3B.2</span>
+                    <span className="text-[10px] font-mono text-[#8C857B]">3B.2B</span>
                   </button>
                 );
               })}
@@ -1196,34 +1197,34 @@ export function AdminConsole() {
             {activeSection === 'audit' && <AdminAuditLogCenter />}
 
             {/* ==================================================
-                ROUND 3B.2 PLACEHOLDERS (HOMEPAGE CMS & PLATFORM SETTINGS)
+                SECTION 14: STOREFRONT HOMEPAGE CMS & MERCHANDISING
             ================================================== */}
-            {(activeSection === 'cms-preview' || activeSection === 'settings-preview') && (
+            {activeSection === 'cms' && <AdminHomepageCMS />}
+
+            {/* ==================================================
+                PLATFORM SETTINGS PLACEHOLDER (SCHEDULED FOR NEXT PHASE)
+            ================================================== */}
+            {activeSection === 'settings-preview' && (
               <div className="bg-white rounded-2xl border border-[#E6E0D6] p-8 shadow-xs space-y-4">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-[#FBF7EC] border border-[#C59B27]/40 text-xs font-bold text-[#141413]">
                   <Sparkles className="w-4 h-4 text-[#C59B27]" />
                   <span>
                     {t(
-                      'مجدول للمرحلة القادمة (ROUND 3B.2)',
-                      'Scheduled for Next Phase (ROUND 3B.2)'
+                      'مجدول للمرحلة القادمة (Platform Settings)',
+                      'Scheduled for Next Phase (Platform Settings)'
                     )}
                   </span>
                 </div>
                 <h2 className="text-xl font-bold text-[#141413]">
-                  {activeSection === 'cms-preview'
-                    ? t(
-                        'نظام إدارة المحتوى والواجهة التسويقية (CMS)',
-                        'Storefront Homepage CMS'
-                      )
-                    : t(
-                        'إعدادات المنصة والسياسات الضريبية',
-                        'Platform Configuration & Tax Governance'
-                      )}
+                  {t(
+                    'إعدادات المنصة والسياسات الضريبية',
+                    'Platform Configuration & Tax Governance'
+                  )}
                 </h2>
                 <p className="text-xs text-[#57534E] leading-relaxed max-w-2xl">
                   {t(
-                    'هذه الوحدة مخصصة للمرحلة (ROUND 3B.2) لإدارة محتوى الصفحة الرئيسية والبانرات الترويجية وإعدادات السياسات العامة للمنصة.',
-                    'This module is reserved for ROUND 3B.2 to manage Storefront Homepage CMS banners, editorial collections, and platform-wide governance settings.'
+                    'هذه الوحدة مخصصة للمرحلة القادمة لإدارة إعدادات السياسات العامة للمنصة والضوابط التشغيلية.',
+                    'This module is reserved for the next phase to manage platform-wide governance settings and operational policies.'
                   )}
                 </p>
                 <div className="pt-2">

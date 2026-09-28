@@ -670,10 +670,167 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // 10. SETTINGS / HOMEPAGE CONFIG: Public read; Admin-only write
-    match /settings/{settingId} {
+    // 10. SETTINGS & PLATFORM GOVERNANCE:
+    // Strict Public vs Private Boundary:
+    // - /settings/homepageConfig: Publicly readable storefront hero & banner config; Admin-only schema-validated write
+    // - /settings/publicPlatformSettings: Publicly readable storefront operational settings (shipping fees, support contacts, maintenance/checkout flags); Admin-only schema-validated write
+    // - /settings/privatePlatformSettings: Strictly Admin-only read AND write (internal commission defaults, payout SLA, governance notes)
+
+    function isValidHomepageConfigDoc(data) {
+      return data.keys().hasOnly([
+          'heroBadgeAr',
+          'heroBadgeEn',
+          'heroTitleAr',
+          'heroTitleEn',
+          'heroSubtitleAr',
+          'heroSubtitleEn',
+          'heroCtaAr',
+          'heroCtaEn',
+          'heroSecondaryBannerTitleAr',
+          'heroSecondaryBannerTitleEn',
+          'seasonalBannerTitleAr',
+          'seasonalBannerTitleEn',
+          'seasonalBannerSubtitleAr',
+          'seasonalBannerSubtitleEn',
+          'flashDealsActive',
+          'freeShippingThreshold',
+          'updatedAt'
+        ])
+        && isValidString(data.heroBadgeAr, 1, 140)
+        && isValidString(data.heroBadgeEn, 1, 140)
+        && isValidString(data.heroTitleAr, 2, 180)
+        && isValidString(data.heroTitleEn, 2, 180)
+        && isValidString(data.heroSubtitleAr, 2, 350)
+        && isValidString(data.heroSubtitleEn, 2, 350)
+        && isValidString(data.heroCtaAr, 2, 100)
+        && isValidString(data.heroCtaEn, 2, 100)
+        && isValidString(data.heroSecondaryBannerTitleAr, 2, 180)
+        && isValidString(data.heroSecondaryBannerTitleEn, 2, 180)
+        && isValidString(data.seasonalBannerTitleAr, 2, 180)
+        && isValidString(data.seasonalBannerTitleEn, 2, 180)
+        && isValidString(data.seasonalBannerSubtitleAr, 2, 350)
+        && isValidString(data.seasonalBannerSubtitleEn, 2, 350)
+        && data.flashDealsActive is bool
+        && isNonNegativeNumber(data.freeShippingThreshold)
+        && data.freeShippingThreshold <= 100000
+        && (!('updatedAt' in data) || isValidString(data.updatedAt, 4, 60));
+    }
+
+    function isValidPublicPlatformSettingsDoc(data) {
+      return data.keys().hasOnly([
+          'marketplaceNameAr',
+          'marketplaceNameEn',
+          'supportEmail',
+          'supportPhone',
+          'supportWhatsapp',
+          'supportHoursAr',
+          'supportHoursEn',
+          'defaultLanguage',
+          'currencyCode',
+          'vatRatePercent',
+          'vatInclusivePricing',
+          'freeShippingThreshold',
+          'standardShippingFee',
+          'expressShippingFee',
+          'maintenanceBannerActive',
+          'maintenanceBannerAr',
+          'maintenanceBannerEn',
+          'checkoutEnabled',
+          'sellerApplicationsEnabled',
+          'customerReviewsEnabled',
+          'productQuestionsEnabled',
+          'updatedAt'
+        ])
+        && isValidString(data.marketplaceNameAr, 2, 120)
+        && isValidString(data.marketplaceNameEn, 2, 120)
+        && isValidString(data.supportEmail, 5, 120)
+        && isValidString(data.supportPhone, 6, 40)
+        && isValidString(data.supportWhatsapp, 6, 40)
+        && isValidString(data.supportHoursAr, 2, 160)
+        && isValidString(data.supportHoursEn, 2, 160)
+        && data.defaultLanguage in ['ar', 'en']
+        && data.currencyCode == 'SAR'
+        && data.vatRatePercent == 15
+        && data.vatInclusivePricing == true
+        && isNonNegativeNumber(data.freeShippingThreshold)
+        && data.freeShippingThreshold <= 100000
+        && isNonNegativeNumber(data.standardShippingFee)
+        && data.standardShippingFee <= 5000
+        && isNonNegativeNumber(data.expressShippingFee)
+        && data.expressShippingFee <= 5000
+        && data.maintenanceBannerActive is bool
+        && data.maintenanceBannerAr is string
+        && data.maintenanceBannerAr.size() <= 400
+        && data.maintenanceBannerEn is string
+        && data.maintenanceBannerEn.size() <= 400
+        && data.checkoutEnabled is bool
+        && data.sellerApplicationsEnabled is bool
+        && data.customerReviewsEnabled is bool
+        && data.productQuestionsEnabled is bool
+        && isValidString(data.updatedAt, 4, 60);
+    }
+
+    function isValidPrivatePlatformSettingsDoc(data) {
+      return data.keys().hasOnly([
+          'defaultSellerCommissionRate',
+          'minimumPayoutAmount',
+          'payoutSlaBusinessDays',
+          'requireVerifiedBadgeForFeatured',
+          'autoApproveVerifiedSellerProducts',
+          'returnWindowDays',
+          'allowOriginalPaymentRefunds',
+          'lowStockGlobalDefaultThreshold',
+          'internalGovernanceNotesAr',
+          'internalGovernanceNotesEn',
+          'updatedAt',
+          'updatedBy'
+        ])
+        && isNonNegativeNumber(data.defaultSellerCommissionRate)
+        && data.defaultSellerCommissionRate <= 50
+        && isNonNegativeNumber(data.minimumPayoutAmount)
+        && data.minimumPayoutAmount <= 1000000
+        && data.payoutSlaBusinessDays is number
+        && data.payoutSlaBusinessDays >= 1
+        && data.payoutSlaBusinessDays <= 30
+        && data.requireVerifiedBadgeForFeatured is bool
+        && data.autoApproveVerifiedSellerProducts is bool
+        && data.returnWindowDays is number
+        && data.returnWindowDays >= 1
+        && data.returnWindowDays <= 90
+        && data.allowOriginalPaymentRefunds is bool
+        && data.lowStockGlobalDefaultThreshold is number
+        && data.lowStockGlobalDefaultThreshold >= 1
+        && data.lowStockGlobalDefaultThreshold <= 100
+        && data.internalGovernanceNotesAr is string
+        && data.internalGovernanceNotesAr.size() <= 1000
+        && data.internalGovernanceNotesEn is string
+        && data.internalGovernanceNotesEn.size() <= 1000
+        && isValidString(data.updatedAt, 4, 60)
+        && isValidString(data.updatedBy, 2, 120);
+    }
+
+    match /settings/homepage {
       allow read: if true;
-      allow write: if isValidId(settingId) && isAdmin();
+      allow create, update: if isAdmin() && isValidHomepageConfigDoc(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /settings/homepageConfig {
+      allow read: if true;
+      allow create, update: if isAdmin() && isValidHomepageConfigDoc(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /settings/publicPlatformSettings {
+      allow read: if true;
+      allow create, update: if isAdmin() && isValidPublicPlatformSettingsDoc(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /settings/privatePlatformSettings {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && isValidPrivatePlatformSettingsDoc(request.resource.data);
+      allow delete: if false;
     }
   }
 }

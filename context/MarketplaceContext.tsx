@@ -50,6 +50,8 @@ import {
   SupportTicket,
   AuditLogEntry,
   HomepageConfig,
+  PublicPlatformSettings,
+  PrivatePlatformSettings,
 } from '../lib/types';
 import {
   INITIAL_CATEGORIES,
@@ -65,6 +67,8 @@ import {
   INITIAL_TICKETS,
   INITIAL_AUDIT_LOGS,
   INITIAL_HOMEPAGE_CONFIG,
+  INITIAL_PUBLIC_PLATFORM_SETTINGS,
+  INITIAL_PRIVATE_PLATFORM_SETTINGS,
   buildOrderTimeline,
 } from '../lib/seed-catalog';
 import { SEED_PRODUCTS_PART_A } from '../lib/seed-products-a';
@@ -165,6 +169,8 @@ interface MarketplaceContextType {
   tickets: SupportTicket[];
   auditLogs: AuditLogEntry[];
   homepageConfig: HomepageConfig;
+  publicPlatformSettings: PublicPlatformSettings;
+  privatePlatformSettings: PrivatePlatformSettings;
   isLoadingData: boolean;
 
   // Search & Filter State
@@ -304,7 +310,7 @@ interface MarketplaceContextType {
     updates: Partial<Product>,
     logReasonAr: string,
     logReasonEn: string
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   processReturnRequest: (orderId: string, approve: boolean, adminNote: string) => Promise<void>;
   adjustCustomerWalletAndLoyalty: (
     userId: string,
@@ -329,7 +335,17 @@ interface MarketplaceContextType {
   moderateReviewStatus: (reviewId: string, status: Review['status']) => Promise<void>;
   deleteReviewAdmin: (reviewId: string) => Promise<void>;
   deleteQuestionAdmin: (questionId: string) => Promise<void>;
-  updateHomepageConfig: (config: HomepageConfig) => Promise<void>;
+  updateHomepageConfig: (config: HomepageConfig) => Promise<boolean>;
+  updatePublicPlatformSettings: (
+    settings: PublicPlatformSettings,
+    changeSummaryAr?: string,
+    changeSummaryEn?: string
+  ) => Promise<boolean>;
+  updatePrivatePlatformSettings: (
+    settings: PrivatePlatformSettings,
+    changeSummaryAr?: string,
+    changeSummaryEn?: string
+  ) => Promise<boolean>;
   answerProductQuestion: (questionId: string, answerText: string) => Promise<void>;
   addAuditLog: (
     actionAr: string,
@@ -533,6 +549,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [homepageConfig, setHomepageConfig] = useState<HomepageConfig>(INITIAL_HOMEPAGE_CONFIG);
+  const [publicPlatformSettings, setPublicPlatformSettings] = useState<PublicPlatformSettings>(
+    INITIAL_PUBLIC_PLATFORM_SETTINGS
+  );
+  const [privatePlatformSettings, setPrivatePlatformSettings] = useState<PrivatePlatformSettings>(
+    INITIAL_PRIVATE_PLATFORM_SETTINGS
+  );
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
   // Auth & Demo Mode State
@@ -813,10 +835,28 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       doc(db, 'settings', 'homepage'),
       (snap) => {
         if (snap.exists()) {
-          setHomepageConfig(snap.data() as HomepageConfig);
+          const data = snap.data() as HomepageConfig;
+          setHomepageConfig(data);
+          if (typeof data.freeShippingThreshold === 'number' && data.freeShippingThreshold >= 0) {
+            setPublicPlatformSettings((prev) => ({
+              ...prev,
+              freeShippingThreshold: data.freeShippingThreshold,
+            }));
+          }
         }
       },
       (err) => logFirestoreFailure(err, OperationType.GET, 'settings/homepage')
+    );
+
+    const unsubPublicSettings = onSnapshot(
+      doc(db, 'settings', 'publicPlatformSettings'),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as PublicPlatformSettings;
+          setPublicPlatformSettings(data);
+        }
+      },
+      (err) => logFirestoreFailure(err, OperationType.GET, 'settings/publicPlatformSettings')
     );
 
     return () => {
@@ -825,10 +865,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubReviews();
       unsubQuestions();
       unsubHomepage();
+      unsubPublicSettings();
     };
   }, []);
 
-  // 3. Authenticated / Role-Scoped Listeners (Private Sellers, Orders, Tickets & Audit Logs)
+  // 3. Authenticated / Role-Scoped Listeners (Private Sellers, Orders, Tickets, Audit Logs & Admin Private Settings)
   useEffect(() => {
     if (isDemoMode || !currentUser || !auth.currentUser) {
       return;
@@ -841,8 +882,18 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     let unsubAllCoupons: (() => void) | undefined;
     let unsubAllTickets: (() => void) | undefined;
     let unsubAllUsers: (() => void) | undefined;
+    let unsubPrivateSettings: (() => void) | undefined;
 
     if (currentUser.role === 'admin') {
+      unsubPrivateSettings = onSnapshot(
+        doc(db, 'settings', 'privatePlatformSettings'),
+        (snap) => {
+          if (snap.exists()) {
+            setPrivatePlatformSettings(snap.data() as PrivatePlatformSettings);
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.GET, 'settings/privatePlatformSettings')
+      );
       unsubPrivateSellers = onSnapshot(
         collection(db, 'sellers'),
         (snap) => {
@@ -979,6 +1030,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubAllCoupons?.();
       unsubAllTickets?.();
       unsubAllUsers?.();
+      unsubPrivateSettings?.();
     };
   }, [currentUser, isDemoMode]);
 
@@ -1624,8 +1676,15 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
     discountAmount = Number(discountAmount.toFixed(2));
     const netAfterDiscount = Math.max(0, Number((subtotal - discountAmount).toFixed(2)));
+    const effectiveStandardShipping =
+      typeof publicPlatformSettings.standardShippingFee === 'number' &&
+      publicPlatformSettings.standardShippingFee >= 0
+        ? publicPlatformSettings.standardShippingFee
+        : 28;
     const shippingFee =
-      netAfterDiscount === 0 || netAfterDiscount >= homepageConfig.freeShippingThreshold ? 0 : 28;
+      netAfterDiscount === 0 || netAfterDiscount >= homepageConfig.freeShippingThreshold
+        ? 0
+        : effectiveStandardShipping;
 
     // Final payable total is netAfterDiscount + shippingFee (both are VAT-inclusive)
     const total = Number((netAfterDiscount + shippingFee).toFixed(2));
@@ -1643,7 +1702,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       itemCount,
       pointsEarned,
     };
-  }, [cart, appliedCoupon, coupons, lang, homepageConfig.freeShippingThreshold]);
+  }, [
+    cart,
+    appliedCoupon,
+    coupons,
+    lang,
+    homepageConfig.freeShippingThreshold,
+    publicPlatformSettings.standardShippingFee,
+  ]);
 
   // Wishlist & Compare
   const toggleWishlist = useCallback(
@@ -1725,6 +1791,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         return null;
       }
 
+      if (!publicPlatformSettings.checkoutEnabled) {
+        showToast(
+          lang === 'ar'
+            ? 'إتمام الطلبات متوقف مؤقتاً للصيانة المجدولة'
+            : 'Checkout Temporarily Paused',
+          lang === 'ar'
+            ? 'تقوم إدارة المنصة حالياً بإجراء تحديث تشغيلي سريع. يرجى المحاولة بعد قليل.'
+            : 'Platform checkout is temporarily paused for scheduled operational maintenance.',
+          'error'
+        );
+        return null;
+      }
+
       // Re-validate applied coupon before finalizing order
       const liveCoupon = appliedCoupon
         ? coupons.find((c) => c.id === appliedCoupon.id) || appliedCoupon
@@ -1739,7 +1818,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
 
       // Calculate VAT-inclusive final shipping & total
-      const finalShipping = deliverySpeed === 'express' ? 35 : cartSummary.shippingFee;
+      const effectiveExpressFee =
+        typeof publicPlatformSettings.expressShippingFee === 'number' &&
+        publicPlatformSettings.expressShippingFee >= 0
+          ? publicPlatformSettings.expressShippingFee
+          : 35;
+      const finalShipping =
+        deliverySpeed === 'express' ? effectiveExpressFee : cartSummary.shippingFee;
       const finalTotal = Number((cartSummary.netAfterDiscount + finalShipping).toFixed(2));
       const finalVatAmount = Number(((finalTotal * 15) / 115).toFixed(2));
 
@@ -1913,6 +1998,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       lang,
       clearCart,
       showToast,
+      publicPlatformSettings.checkoutEnabled,
+      publicPlatformSettings.expressShippingFee,
     ]
   );
 
@@ -2150,6 +2237,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const submitReview = useCallback(
     async (productId: string, rating: number, title: string, comment: string) => {
+      if (!publicPlatformSettings.customerReviewsEnabled) {
+        showToast(
+          lang === 'ar'
+            ? 'إضافة التقييمات الجديدة متوقفة مؤقتاً من إعدادات المنصة'
+            : 'New customer reviews are currently paused by platform settings',
+          undefined,
+          'error'
+        );
+        return;
+      }
       if (!currentUser) {
         showToast(
           lang === 'ar' ? 'يرجى تسجيل الدخول لإضافة تقييم' : 'Please sign in to submit a review',
@@ -2224,11 +2321,29 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [products, orders, currentUser, isDemoMode, lang, showToast]
+    [
+      products,
+      orders,
+      currentUser,
+      isDemoMode,
+      lang,
+      showToast,
+      publicPlatformSettings.customerReviewsEnabled,
+    ]
   );
 
   const submitQuestion = useCallback(
     async (productId: string, questionText: string) => {
+      if (!publicPlatformSettings.productQuestionsEnabled) {
+        showToast(
+          lang === 'ar'
+            ? 'طرح الأسئلة الجديدة على المنتجات متوقف مؤقتاً من إعدادات المنصة'
+            : 'New product Q&A submissions are currently paused by platform settings',
+          undefined,
+          'error'
+        );
+        return;
+      }
       if (!currentUser) {
         showToast(lang === 'ar' ? 'يرجى تسجيل الدخول لطرح سؤال' : 'Please sign in to ask a question', undefined, 'error');
         return;
@@ -2259,7 +2374,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, lang, showToast]
+    [currentUser, isDemoMode, lang, showToast, publicPlatformSettings.productQuestionsEnabled]
   );
 
   const submitSupportTicket = useCallback(
@@ -3062,6 +3177,18 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const submitSellerApplication = useCallback(
     async (sellerData: Partial<Seller>) => {
+      if (!publicPlatformSettings.sellerApplicationsEnabled) {
+        showToast(
+          lang === 'ar'
+            ? 'استقبال طلبات انضمام التجار الجدد متوقف مؤقتاً'
+            : 'New Seller Onboarding Paused',
+          lang === 'ar'
+            ? 'تم إيقاف استقبال طلبات المتاجر الجديدة مؤقتاً من قِبل الإدارة التنفيذية.'
+            : 'New merchant applications are temporarily paused by platform governance.',
+          'error'
+        );
+        return;
+      }
       if (!currentUser) {
         showToast(
           lang === 'ar' ? 'يرجى تسجيل الدخول لتقديم طلب انضمام كمتجر' : 'Please sign in to submit a seller application',
@@ -3090,7 +3217,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         verifiedBadge: false,
         rating: 5.0,
         reviewCount: 1,
-        commissionRate: 10,
+        commissionRate:
+          typeof privatePlatformSettings.defaultSellerCommissionRate === 'number'
+            ? privatePlatformSettings.defaultSellerCommissionRate
+            : 12,
         grossSales: 0,
         platformCommission: 0,
         refundsTotal: 0,
@@ -3128,7 +3258,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, lang, showToast]
+    [
+      currentUser,
+      isDemoMode,
+      lang,
+      showToast,
+      publicPlatformSettings.sellerApplicationsEnabled,
+      privatePlatformSettings.defaultSellerCommissionRate,
+    ]
   );
 
   const updateSellerProfile = useCallback(
@@ -3289,6 +3426,20 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         calculateSellerPayoutReservation(target, tickets);
 
       const cleanAmount = Number(Number(amount || 0).toFixed(2));
+      const minPayout =
+        typeof privatePlatformSettings.minimumPayoutAmount === 'number'
+          ? privatePlatformSettings.minimumPayoutAmount
+          : 500;
+      if (cleanAmount < minPayout) {
+        showToast(
+          lang === 'ar'
+            ? `الحد الأدنى لطلب تسوية الأرباح هو ${formatPrice(minPayout)}`
+            : `Minimum payout request amount is ${formatPrice(minPayout)}`,
+          undefined,
+          'error'
+        );
+        return;
+      }
       if (cleanAmount <= 0 || cleanAmount > requestableBalance) {
         showToast(
           lang === 'ar'
@@ -3368,6 +3519,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       formatPrice,
       lang,
       showToast,
+      privatePlatformSettings.minimumPayoutAmount,
     ]
   );
 
@@ -3734,10 +3886,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       updates: Partial<Product>,
       logReasonAr: string,
       logReasonEn: string
-    ) => {
-      if (!currentUser || currentUser.role !== 'admin') return;
+    ): Promise<boolean> => {
+      if (!currentUser || currentUser.role !== 'admin') return false;
       const target = products.find((p) => p.id === productId);
-      if (!target) return;
+      if (!target) return false;
       const updated: Product = { ...target, ...updates };
       if (!isDemoMode) {
         try {
@@ -3747,13 +3899,18 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           await setDoc(doc(db, 'products', productId), cleanPayload);
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'products');
-          showToast(lang === 'ar' ? 'تعذر تحديث المنتج' : 'Failed to moderate product', undefined, 'error');
-          return;
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث المنتج في قاعدة البيانات' : 'Failed to moderate product',
+            undefined,
+            'error'
+          );
+          return false;
         }
       }
       setProducts((prev) => prev.map((p) => (p.id === productId ? updated : p)));
       await addAuditLog(logReasonAr, logReasonEn, 'product', productId);
       showToast(lang === 'ar' ? logReasonAr : logReasonEn, undefined, 'success');
+      return true;
     },
     [currentUser, isDemoMode, products, addAuditLog, lang, showToast]
   );
@@ -4332,29 +4489,363 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   );
 
   const updateHomepageConfig = useCallback(
-    async (config: HomepageConfig) => {
-      if (!currentUser || currentUser.role !== 'admin') return;
+    async (config: HomepageConfig): Promise<boolean> => {
+      if (!currentUser || currentUser.role !== 'admin') return false;
+
+      const heroTitleAr = (config.heroTitleAr || '').trim();
+      const heroTitleEn = (config.heroTitleEn || '').trim();
+      if (heroTitleAr.length < 2 || heroTitleEn.length < 2) {
+        showToast(
+          lang === 'ar'
+            ? 'يرجى إدخال عنوان البانر الرئيسي باللغتين العربية والإنجليزية'
+            : 'Both Arabic and English Hero Titles are required',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      const threshold = Number(config.freeShippingThreshold);
+      if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100000) {
+        showToast(
+          lang === 'ar'
+            ? 'حد الشحن المجاني يجب أن يكون رقماً غير سالب (0 - 100,000 ر.س)'
+            : 'Free shipping threshold must be a non-negative number (0 - 100,000 SAR)',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      const nowIso = new Date().toISOString();
+      const sanitizedConfig: HomepageConfig = {
+        heroBadgeAr: (config.heroBadgeAr || '').trim().slice(0, 140) || INITIAL_HOMEPAGE_CONFIG.heroBadgeAr,
+        heroBadgeEn: (config.heroBadgeEn || '').trim().slice(0, 140) || INITIAL_HOMEPAGE_CONFIG.heroBadgeEn,
+        heroTitleAr: heroTitleAr.slice(0, 180),
+        heroTitleEn: heroTitleEn.slice(0, 180),
+        heroSubtitleAr:
+          (config.heroSubtitleAr || '').trim().slice(0, 350) || INITIAL_HOMEPAGE_CONFIG.heroSubtitleAr,
+        heroSubtitleEn:
+          (config.heroSubtitleEn || '').trim().slice(0, 350) || INITIAL_HOMEPAGE_CONFIG.heroSubtitleEn,
+        heroCtaAr: (config.heroCtaAr || '').trim().slice(0, 100) || INITIAL_HOMEPAGE_CONFIG.heroCtaAr,
+        heroCtaEn: (config.heroCtaEn || '').trim().slice(0, 100) || INITIAL_HOMEPAGE_CONFIG.heroCtaEn,
+        heroSecondaryBannerTitleAr:
+          (config.heroSecondaryBannerTitleAr || '').trim().slice(0, 180) ||
+          INITIAL_HOMEPAGE_CONFIG.heroSecondaryBannerTitleAr,
+        heroSecondaryBannerTitleEn:
+          (config.heroSecondaryBannerTitleEn || '').trim().slice(0, 180) ||
+          INITIAL_HOMEPAGE_CONFIG.heroSecondaryBannerTitleEn,
+        seasonalBannerTitleAr:
+          (config.seasonalBannerTitleAr || '').trim().slice(0, 180) ||
+          INITIAL_HOMEPAGE_CONFIG.seasonalBannerTitleAr,
+        seasonalBannerTitleEn:
+          (config.seasonalBannerTitleEn || '').trim().slice(0, 180) ||
+          INITIAL_HOMEPAGE_CONFIG.seasonalBannerTitleEn,
+        seasonalBannerSubtitleAr:
+          (config.seasonalBannerSubtitleAr || '').trim().slice(0, 350) ||
+          INITIAL_HOMEPAGE_CONFIG.seasonalBannerSubtitleAr,
+        seasonalBannerSubtitleEn:
+          (config.seasonalBannerSubtitleEn || '').trim().slice(0, 350) ||
+          INITIAL_HOMEPAGE_CONFIG.seasonalBannerSubtitleEn,
+        flashDealsActive: Boolean(config.flashDealsActive),
+        freeShippingThreshold: Number(threshold.toFixed(2)),
+        updatedAt: nowIso,
+      };
+
+      const syncedPublicSettings: PublicPlatformSettings = {
+        ...publicPlatformSettings,
+        freeShippingThreshold: sanitizedConfig.freeShippingThreshold,
+        updatedAt: nowIso,
+      };
+
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'settings', 'homepage'), config);
+          const batch = writeBatch(db);
+          batch.set(doc(db, 'settings', 'homepage'), sanitizedConfig);
+          batch.set(doc(db, 'settings', 'publicPlatformSettings'), syncedPublicSettings);
+          await batch.commit();
         } catch (e) {
-          logFirestoreFailure(e, OperationType.UPDATE, 'settings');
-          showToast(lang === 'ar' ? 'تعذر تحديث إعدادات الواجهة' : 'Failed to update homepage settings', undefined, 'error');
-          return;
+          logFirestoreFailure(e, OperationType.UPDATE, 'settings/homepage');
+          showToast(
+            lang === 'ar'
+              ? 'تعذر حفظ إعدادات الواجهة التسويقية في قاعدة البيانات'
+              : 'Failed to persist homepage configuration',
+            undefined,
+            'error'
+          );
+          return false;
         }
       }
-      setHomepageConfig(config);
+
+      setHomepageConfig(sanitizedConfig);
+      setPublicPlatformSettings(syncedPublicSettings);
+
       await addAuditLog(
-        'تحديث محتوى وبنرات الصفحة الرئيسية لمنصة أثيل',
-        'Updated Atheel Homepage Editorial Hero & Campaign Banners',
+        `تحديث محتوى وبنرات الصفحة الرئيسية (CMS) — العروض الخاطفة: ${
+          sanitizedConfig.flashDealsActive ? 'مفعّلة' : 'موقوفة'
+        }، الشحن المجاني: ${sanitizedConfig.freeShippingThreshold} ر.س`,
+        `Updated Homepage CMS hero & seasonal banners (Flash Deals: ${
+          sanitizedConfig.flashDealsActive ? 'ON' : 'OFF'
+        }, Free Shipping >= ${sanitizedConfig.freeShippingThreshold} SAR)`,
         'homepage',
         'homepage'
       );
       showToast(
-        lang === 'ar' ? 'تم تحديث محتوى الصفحة الرئيسية بنجاح' : 'Homepage Content Updated',
+        lang === 'ar'
+          ? isDemoMode
+            ? 'تم تحديث محتوى الصفحة الرئيسية (محاكاة محلية في وضع العرض التجريبي)'
+            : 'تم حفظ ونشر تحديثات الصفحة الرئيسية بنجاح'
+          : isDemoMode
+          ? 'Homepage CMS Updated (Local Demo Simulation)'
+          : 'Homepage CMS Published Successfully',
         undefined,
         'success'
       );
+      return true;
+    },
+    [currentUser, isDemoMode, publicPlatformSettings, addAuditLog, lang, showToast]
+  );
+
+  const updatePublicPlatformSettings = useCallback(
+    async (
+      settings: PublicPlatformSettings,
+      changeSummaryAr?: string,
+      changeSummaryEn?: string
+    ): Promise<boolean> => {
+      if (!currentUser || currentUser.role !== 'admin') return false;
+
+      const nameAr = (settings.marketplaceNameAr || '').trim();
+      const nameEn = (settings.marketplaceNameEn || '').trim();
+      const email = (settings.supportEmail || '').trim();
+      const phone = (settings.supportPhone || '').trim();
+      const whatsapp = (settings.supportWhatsapp || '').trim();
+
+      if (nameAr.length < 2 || nameEn.length < 2) {
+        showToast(
+          lang === 'ar'
+            ? 'يرجى إدخال اسم المنصة باللغتين العربية والإنجليزية'
+            : 'Marketplace name is required in both Arabic and English',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        showToast(
+          lang === 'ar'
+            ? 'يرجى إدخال بريد إلكتروني صحيح لخدمة العملاء'
+            : 'Please enter a valid support email address',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      const freeThreshold = Number(settings.freeShippingThreshold);
+      const stdFee = Number(settings.standardShippingFee);
+      const expFee = Number(settings.expressShippingFee);
+
+      if (
+        !Number.isFinite(freeThreshold) ||
+        freeThreshold < 0 ||
+        freeThreshold > 100000 ||
+        !Number.isFinite(stdFee) ||
+        stdFee < 0 ||
+        stdFee > 5000 ||
+        !Number.isFinite(expFee) ||
+        expFee < 0 ||
+        expFee > 5000
+      ) {
+        showToast(
+          lang === 'ar'
+            ? 'يرجى التأكد من صحة قيم رسوم الشحن وحد الشحن المجاني (أرقام غير سالبة)'
+            : 'Shipping fees and free shipping threshold must be valid non-negative numbers',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      const nowIso = new Date().toISOString();
+      const sanitized: PublicPlatformSettings = {
+        marketplaceNameAr: nameAr.slice(0, 120),
+        marketplaceNameEn: nameEn.slice(0, 120),
+        supportEmail: email.slice(0, 120),
+        supportPhone: phone.slice(0, 40) || INITIAL_PUBLIC_PLATFORM_SETTINGS.supportPhone,
+        supportWhatsapp: whatsapp.slice(0, 40) || INITIAL_PUBLIC_PLATFORM_SETTINGS.supportWhatsapp,
+        supportHoursAr:
+          (settings.supportHoursAr || '').trim().slice(0, 160) ||
+          INITIAL_PUBLIC_PLATFORM_SETTINGS.supportHoursAr,
+        supportHoursEn:
+          (settings.supportHoursEn || '').trim().slice(0, 160) ||
+          INITIAL_PUBLIC_PLATFORM_SETTINGS.supportHoursEn,
+        defaultLanguage: settings.defaultLanguage === 'en' ? 'en' : 'ar',
+        currencyCode: 'SAR',
+        vatRatePercent: 15,
+        vatInclusivePricing: true,
+        freeShippingThreshold: Number(freeThreshold.toFixed(2)),
+        standardShippingFee: Number(stdFee.toFixed(2)),
+        expressShippingFee: Number(expFee.toFixed(2)),
+        maintenanceBannerActive: Boolean(settings.maintenanceBannerActive),
+        maintenanceBannerAr: (settings.maintenanceBannerAr || '').trim().slice(0, 400),
+        maintenanceBannerEn: (settings.maintenanceBannerEn || '').trim().slice(0, 400),
+        checkoutEnabled: Boolean(settings.checkoutEnabled),
+        sellerApplicationsEnabled: Boolean(settings.sellerApplicationsEnabled),
+        customerReviewsEnabled: Boolean(settings.customerReviewsEnabled),
+        productQuestionsEnabled: Boolean(settings.productQuestionsEnabled),
+        updatedAt: nowIso,
+      };
+
+      const syncedHomepage: HomepageConfig = {
+        ...homepageConfig,
+        freeShippingThreshold: sanitized.freeShippingThreshold,
+        updatedAt: nowIso,
+      };
+
+      if (!isDemoMode) {
+        try {
+          const batch = writeBatch(db);
+          batch.set(doc(db, 'settings', 'publicPlatformSettings'), sanitized);
+          batch.set(doc(db, 'settings', 'homepage'), syncedHomepage);
+          await batch.commit();
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'settings/publicPlatformSettings');
+          showToast(
+            lang === 'ar'
+              ? 'تعذر حفظ الإعدادات العامة للمنصة في قاعدة البيانات'
+              : 'Failed to save public platform settings',
+            undefined,
+            'error'
+          );
+          return false;
+        }
+      }
+
+      setPublicPlatformSettings(sanitized);
+      setHomepageConfig(syncedHomepage);
+
+      await addAuditLog(
+        changeSummaryAr ||
+          `تحديث الإعدادات العامة وسياسات الشحن للمنصة (الشحن المجاني: ${sanitized.freeShippingThreshold} ر.س، العادي: ${sanitized.standardShippingFee} ر.س، السريع: ${sanitized.expressShippingFee} ر.س)`,
+        changeSummaryEn ||
+          `Updated public platform settings (Free Shipping >= ${sanitized.freeShippingThreshold} SAR, Standard: ${sanitized.standardShippingFee} SAR, Express: ${sanitized.expressShippingFee} SAR)`,
+        'settings',
+        'publicPlatformSettings'
+      );
+
+      showToast(
+        lang === 'ar'
+          ? isDemoMode
+            ? 'تم تحديث إعدادات المنصة العامة (محاكاة محلية في وضع العرض التجريبي)'
+            : 'تم حفظ ونشر إعدادات المنصة العامة بنجاح'
+          : isDemoMode
+          ? 'Public Platform Settings Updated (Local Demo Simulation)'
+          : 'Public Platform Settings Saved Successfully',
+        undefined,
+        'success'
+      );
+      return true;
+    },
+    [currentUser, isDemoMode, homepageConfig, addAuditLog, lang, showToast]
+  );
+
+  const updatePrivatePlatformSettings = useCallback(
+    async (
+      settings: PrivatePlatformSettings,
+      changeSummaryAr?: string,
+      changeSummaryEn?: string
+    ): Promise<boolean> => {
+      if (!currentUser || currentUser.role !== 'admin') return false;
+
+      const defaultComm = Number(settings.defaultSellerCommissionRate);
+      const minPayout = Number(settings.minimumPayoutAmount);
+      const payoutSla = Math.round(Number(settings.payoutSlaBusinessDays));
+      const returnWindow = Math.round(Number(settings.returnWindowDays));
+      const lowStockDef = Math.round(Number(settings.lowStockGlobalDefaultThreshold));
+
+      if (
+        !Number.isFinite(defaultComm) ||
+        defaultComm < 0 ||
+        defaultComm > 50 ||
+        !Number.isFinite(minPayout) ||
+        minPayout < 0 ||
+        minPayout > 1000000 ||
+        !Number.isFinite(payoutSla) ||
+        payoutSla < 1 ||
+        payoutSla > 30 ||
+        !Number.isFinite(returnWindow) ||
+        returnWindow < 1 ||
+        returnWindow > 90 ||
+        !Number.isFinite(lowStockDef) ||
+        lowStockDef < 1 ||
+        lowStockDef > 100
+      ) {
+        showToast(
+          lang === 'ar'
+            ? 'يرجى التحقق من نطاقات إعدادات الحوكمة (العمولة 0-50%، مهلة الإرجاع 1-90 يوماً)'
+            : 'Please verify governance numeric bounds (Commission 0-50%, Return Window 1-90 days)',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      const nowIso = new Date().toISOString();
+      const sanitized: PrivatePlatformSettings = {
+        defaultSellerCommissionRate: Number(defaultComm.toFixed(2)),
+        minimumPayoutAmount: Number(minPayout.toFixed(2)),
+        payoutSlaBusinessDays: payoutSla,
+        requireVerifiedBadgeForFeatured: Boolean(settings.requireVerifiedBadgeForFeatured),
+        autoApproveVerifiedSellerProducts: Boolean(settings.autoApproveVerifiedSellerProducts),
+        returnWindowDays: returnWindow,
+        allowOriginalPaymentRefunds: Boolean(settings.allowOriginalPaymentRefunds),
+        lowStockGlobalDefaultThreshold: lowStockDef,
+        internalGovernanceNotesAr: (settings.internalGovernanceNotesAr || '').trim().slice(0, 1000),
+        internalGovernanceNotesEn: (settings.internalGovernanceNotesEn || '').trim().slice(0, 1000),
+        updatedAt: nowIso,
+        updatedBy: currentUser.name || 'Admin',
+      };
+
+      if (!isDemoMode) {
+        try {
+          await setDoc(doc(db, 'settings', 'privatePlatformSettings'), sanitized);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'settings/privatePlatformSettings');
+          showToast(
+            lang === 'ar'
+              ? 'تعذر حفظ إعدادات الحوكمة الخاصة في قاعدة البيانات'
+              : 'Failed to save private governance settings',
+            undefined,
+            'error'
+          );
+          return false;
+        }
+      }
+
+      setPrivatePlatformSettings(sanitized);
+
+      await addAuditLog(
+        changeSummaryAr ||
+          `تحديث إعدادات الحوكمة الداخلية والسياسات المالية (العمولة الافتراضية: ${sanitized.defaultSellerCommissionRate}%، الحد الأدنى للتسوية: ${sanitized.minimumPayoutAmount} ر.س، نافذة الإرجاع: ${sanitized.returnWindowDays} يوماً)`,
+        changeSummaryEn ||
+          `Updated private governance settings (Default Commission: ${sanitized.defaultSellerCommissionRate}%, Min Payout: ${sanitized.minimumPayoutAmount} SAR, Return Window: ${sanitized.returnWindowDays}d)`,
+        'settings',
+        'privatePlatformSettings'
+      );
+
+      showToast(
+        lang === 'ar'
+          ? isDemoMode
+            ? 'تم تحديث إعدادات الحوكمة الخاصة (محاكاة محلية في وضع العرض التجريبي)'
+            : 'تم حفظ إعدادات الحوكمة الخاصة بنجاح'
+          : isDemoMode
+          ? 'Private Governance Settings Updated (Local Demo Simulation)'
+          : 'Private Governance Settings Saved Successfully',
+        undefined,
+        'success'
+      );
+      return true;
     },
     [currentUser, isDemoMode, addAuditLog, lang, showToast]
   );
@@ -4449,6 +4940,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     tickets,
     auditLogs,
     homepageConfig,
+    publicPlatformSettings,
+    privatePlatformSettings,
     isLoadingData,
     searchQuery,
     setSearchQuery,
@@ -4527,6 +5020,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     deleteReviewAdmin,
     deleteQuestionAdmin,
     updateHomepageConfig,
+    updatePublicPlatformSettings,
+    updatePrivatePlatformSettings,
     answerProductQuestion,
     addAuditLog,
     toasts,

@@ -539,6 +539,7 @@ export interface AuditLogEntry {
     | 'order'
     | 'coupon'
     | 'homepage'
+    | 'settings'
     | 'return'
     | 'customer'
     | 'ticket'
@@ -565,4 +566,46 @@ export interface HomepageConfig {
   seasonalBannerSubtitleEn: string;
   flashDealsActive: boolean;
   freeShippingThreshold: number;
+  updatedAt?: string;
 }
+
+export interface PublicPlatformSettings {
+  marketplaceNameAr: string;
+  marketplaceNameEn: string;
+  supportEmail: string;
+  supportPhone: string;
+  supportWhatsapp: string;
+  supportHoursAr: string;
+  supportHoursEn: string;
+  defaultLanguage: Language;
+  currencyCode: 'SAR';
+  vatRatePercent: 15;
+  vatInclusivePricing: true;
+  freeShippingThreshold: number;
+  standardShippingFee: number;
+  expressShippingFee: number;
+  maintenanceBannerActive: boolean;
+  maintenanceBannerAr: string;
+  maintenanceBannerEn: string;
+  checkoutEnabled: boolean;
+  sellerApplicationsEnabled: boolean;
+  customerReviewsEnabled: boolean;
+  productQuestionsEnabled: boolean;
+  updatedAt: string;
+}
+
+export interface PrivatePlatformSettings {
+  defaultSellerCommissionRate: number;
+  minimumPayoutAmount: number;
+  payoutSlaBusinessDays: number;
+  requireVerifiedBadgeForFeatured: boolean;
+  autoApproveVerifiedSellerProducts: boolean;
+  returnWindowDays: number;
+  allowOriginalPaymentRefunds: boolean;
+  lowStockGlobalDefaultThreshold: number;
+  internalGovernanceNotesAr: string;
+  internalGovernanceNotesEn: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+

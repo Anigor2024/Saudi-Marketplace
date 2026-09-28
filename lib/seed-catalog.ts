@@ -13,6 +13,8 @@ import {
   SupportTicket,
   AuditLogEntry,
   HomepageConfig,
+  PublicPlatformSettings,
+  PrivatePlatformSettings,
   OrderTimelineEvent,
   OrderStatus,
 } from './types';
@@ -38,6 +40,51 @@ export const INITIAL_HOMEPAGE_CONFIG: HomepageConfig = {
     'Exclusive privileges up to 30% off specialty espresso machines, gilded hospitality sets, and royal incense with complimentary express delivery across KSA.',
   flashDealsActive: true,
   freeShippingThreshold: 350,
+  updatedAt: '2026-09-27T09:15:00.000Z',
+};
+
+export const INITIAL_PUBLIC_PLATFORM_SETTINGS: PublicPlatformSettings = {
+  marketplaceNameAr: 'أثـيـل — السوق السعودي الفاخر',
+  marketplaceNameEn: 'ATHEEL — Saudi Luxury Marketplace',
+  supportEmail: 'concierge@atheel.sa',
+  supportPhone: '+966 11 829 4400',
+  supportWhatsapp: '+966 50 829 4400',
+  supportHoursAr: 'يومياً من ٩:٠٠ صباحاً حتى ١١:٠٠ مساءً بتوقيت الرياض',
+  supportHoursEn: 'Daily 9:00 AM – 11:00 PM (Riyadh Time GMT+3)',
+  defaultLanguage: 'ar',
+  currencyCode: 'SAR',
+  vatRatePercent: 15,
+  vatInclusivePricing: true,
+  freeShippingThreshold: 350,
+  standardShippingFee: 28,
+  expressShippingFee: 35,
+  maintenanceBannerActive: false,
+  maintenanceBannerAr:
+    'تنبيه تشغيلي: تخضع بوابة الشحن السريع لبعض المدن لتحديثات مجدولة الليلة بين ٢:٠٠ ص و ٤:٠٠ ص بتوقيت الرياض.',
+  maintenanceBannerEn:
+    'Operational Notice: Express courier dispatch undergoes scheduled optimization tonight between 2:00 AM and 4:00 AM KSA.',
+  checkoutEnabled: true,
+  sellerApplicationsEnabled: true,
+  customerReviewsEnabled: true,
+  productQuestionsEnabled: true,
+  updatedAt: '2026-09-27T10:00:00.000Z',
+};
+
+export const INITIAL_PRIVATE_PLATFORM_SETTINGS: PrivatePlatformSettings = {
+  defaultSellerCommissionRate: 12,
+  minimumPayoutAmount: 500,
+  payoutSlaBusinessDays: 3,
+  requireVerifiedBadgeForFeatured: true,
+  autoApproveVerifiedSellerProducts: false,
+  returnWindowDays: 14,
+  allowOriginalPaymentRefunds: true,
+  lowStockGlobalDefaultThreshold: 5,
+  internalGovernanceNotesAr:
+    'تُطبق سياسة الفوترة الضريبية المتوافقة مع هيئة الزكاة والضريبة والجمارك (ZATCA) بنسبة ١٥٪ شاملة في السعر. تتطلب تسويات الخزينة النهائية (completed) وعكس مبالغ البوابات الخارجية تأكيداً من الخدمة البنكية الخلفية.',
+  internalGovernanceNotesEn:
+    'Enforce ZATCA 15% VAT-inclusive retail pricing across all boutiques. Final treasury payout settlement (completed) and external gateway refund reversals require trusted backend banking webhook confirmation.',
+  updatedAt: '2026-09-27T10:00:00.000Z',
+  updatedBy: 'نورة القحطاني (Admin)',
 };
 
 export const INITIAL_CATEGORIES: Category[] = [
