@@ -276,6 +276,7 @@ export interface Review {
   title: string;
   comment: string;
   verifiedPurchase: boolean;
+  verifiedOrderId?: string;
   helpfulCount: number;
   createdAt: string;
   status: 'approved' | 'pending' | 'hidden';

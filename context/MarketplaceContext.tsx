@@ -6,6 +6,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
   deleteDoc,
   onSnapshot,
   query,
@@ -117,6 +118,8 @@ interface MarketplaceContextType {
   currentUser: UserProfile | null;
   isAuthLoading: boolean;
   isDemoMode: boolean;
+  canAccessSellerDashboard: boolean;
+  canAccessAdminDashboard: boolean;
   exitDemoMode: () => void;
   loginWithDemoRole: (role: UserRole) => void;
   loginWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
@@ -244,6 +247,27 @@ interface MarketplaceContextType {
   saveCoupon: (coupon: Coupon) => Promise<void>;
   toggleCouponStatus: (couponId: string) => Promise<void>;
   submitSellerApplication: (sellerData: Partial<Seller>) => Promise<void>;
+  updateSellerProfile: (
+    sellerId: string,
+    safeUpdates: Partial<
+      Pick<
+        Seller,
+        | 'nameAr'
+        | 'nameEn'
+        | 'descriptionAr'
+        | 'descriptionEn'
+        | 'cityAr'
+        | 'cityEn'
+        | 'phone'
+        | 'email'
+        | 'iban'
+        | 'ownerName'
+        | 'categories'
+        | 'crNumber'
+        | 'vatNumber'
+      >
+    >
+  ) => Promise<void>;
   requestSellerPayout: (sellerId: string, amount: number) => Promise<void>;
 
   // Admin Actions
@@ -272,6 +296,94 @@ function logFirestoreFailure(err: unknown, op: OperationType, path: string) {
   } catch {
     // Structured error was logged and thrown by handleFirestoreError; caught here so caller can display UI feedback cleanly
   }
+}
+
+function isCouponNotExpired(expiresAt: string): boolean {
+  if (!expiresAt || !expiresAt.trim()) return false;
+  const clean = expiresAt.trim();
+  const expiryMs = /^\d{4}-\d{2}-\d{2}$/.test(clean)
+    ? new Date(`${clean}T23:59:59.999Z`).getTime()
+    : new Date(clean).getTime();
+  if (Number.isNaN(expiryMs)) return false;
+  return Date.now() <= expiryMs;
+}
+
+function evaluateCouponEligibility(
+  coupon: Coupon,
+  cartItems: CartItem[],
+  lang: Language
+): { valid: boolean; eligibleSubtotal: number; message: string } {
+  if (!coupon.isActive) {
+    return {
+      valid: false,
+      eligibleSubtotal: 0,
+      message:
+        lang === 'ar'
+          ? `كود الخصم (${coupon.code}) غير مفعّل حالياً`
+          : `Coupon code (${coupon.code}) is currently inactive`,
+    };
+  }
+
+  if (!isCouponNotExpired(coupon.expiresAt)) {
+    return {
+      valid: false,
+      eligibleSubtotal: 0,
+      message:
+        lang === 'ar'
+          ? `انتهت صلاحية كود الخصم (${coupon.code}) بتاريخ ${coupon.expiresAt}`
+          : `Coupon code (${coupon.code}) expired on ${coupon.expiresAt}`,
+    };
+  }
+
+  if (coupon.usedCount >= coupon.maxUses) {
+    return {
+      valid: false,
+      eligibleSubtotal: 0,
+      message:
+        lang === 'ar'
+          ? `تم استنفاد الحد الأقصى لاستخدام الكوبون (${coupon.code})`
+          : `Coupon (${coupon.code}) has reached its maximum usage limit`,
+    };
+  }
+
+  const subtotal = cartItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+  const isSellerScoped = Boolean(coupon.sellerId && coupon.sellerId !== 'all');
+  const sellerItems = isSellerScoped
+    ? cartItems.filter((item) => item.product.sellerId === coupon.sellerId)
+    : cartItems;
+
+  if (isSellerScoped && sellerItems.length === 0) {
+    return {
+      valid: false,
+      eligibleSubtotal: 0,
+      message:
+        lang === 'ar'
+          ? `هذا الكوبون مخصص لمنتجات (${coupon.sellerNameAr || coupon.sellerId}) فقط`
+          : `This coupon is valid only for ${coupon.sellerNameAr || coupon.sellerId} items`,
+    };
+  }
+
+  const eligibleSubtotal = sellerItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+
+  if (subtotal < coupon.minOrderAmount || eligibleSubtotal < coupon.minOrderAmount) {
+    return {
+      valid: false,
+      eligibleSubtotal,
+      message:
+        lang === 'ar'
+          ? `الحد الأدنى للطلب المؤهل لتفعيل الكوبون هو ${coupon.minOrderAmount} ر.س`
+          : `Minimum eligible order of SAR ${coupon.minOrderAmount} required`,
+    };
+  }
+
+  return {
+    valid: true,
+    eligibleSubtotal,
+    message:
+      lang === 'ar'
+        ? `تم تطبيق الكوبون ${coupon.code} بنجاح!`
+        : `Coupon ${coupon.code} applied!`,
+  };
 }
 
 function mapFirebaseAuthError(error: unknown, lang: Language): string {
@@ -674,6 +786,40 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     });
   }, []);
 
+  // Strict Role-Based Access Control (RBAC) for Seller & Admin Portals
+  // Demo Mode remains isolated in local memory and never grants real Firebase privileges.
+  const canAccessSellerDashboard = useMemo(() => {
+    if (!currentUser) return false;
+    if (isDemoMode) {
+      return currentUser.role === 'seller' || currentUser.role === 'admin';
+    }
+    return (
+      (currentUser.role === 'seller' && Boolean(currentUser.sellerId?.trim())) ||
+      currentUser.role === 'admin'
+    );
+  }, [currentUser, isDemoMode]);
+
+  const canAccessAdminDashboard = useMemo(() => {
+    if (!currentUser) return false;
+    if (isDemoMode) {
+      return currentUser.role === 'admin';
+    }
+    return currentUser.role === 'admin';
+  }, [currentUser, isDemoMode]);
+
+  const isViewAuthorizedForProfile = useCallback((view: AppView, profile: UserProfile): boolean => {
+    if (view === 'admin-dashboard') {
+      return profile.role === 'admin';
+    }
+    if (view === 'seller-dashboard') {
+      return (
+        (profile.role === 'seller' && Boolean(profile.sellerId?.trim())) ||
+        profile.role === 'admin'
+      );
+    }
+    return true;
+  }, []);
+
   const navigateTo = useCallback(
     (
       view: AppView,
@@ -694,9 +840,15 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         setSelectedSellerId(params.sellerId);
       }
 
-      // Require authentication for protected customer routes (checkout, orders, account)
-      const protectedCustomerViews: AppView[] = ['checkout', 'orders', 'account'];
-      if (protectedCustomerViews.includes(view) && !currentUser) {
+      // Require authentication for protected customer, seller, and admin routes
+      const protectedViews: AppView[] = [
+        'checkout',
+        'orders',
+        'account',
+        'seller-dashboard',
+        'admin-dashboard',
+      ];
+      if (protectedViews.includes(view) && !currentUser) {
         setPendingRedirectView(view);
         setActiveView('login');
         if (typeof window !== 'undefined') {
@@ -705,12 +857,40 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         return;
       }
 
+      // Enforce Role-Based Access Control on Seller & Admin portals
+      if (view === 'seller-dashboard' && !canAccessSellerDashboard) {
+        showToast(
+          lang === 'ar' ? 'غير مصرح بالوصول إلى مركز التجار' : 'Access Denied: Seller Center',
+          lang === 'ar'
+            ? 'يتطلب الوصول حساب تاجر معتمد مرتبط بمتجر موثق'
+            : 'Requires an approved Seller account with a valid sellerId',
+          'error'
+        );
+      } else if (view === 'admin-dashboard' && !canAccessAdminDashboard) {
+        showToast(
+          lang === 'ar'
+            ? 'غير مصرح بالوصول إلى لوحة الإدارة التنفيذية'
+            : 'Access Denied: Executive Admin Console',
+          lang === 'ar'
+            ? 'هذه البوابة مخصصة لمسؤولي النظام المعتمدين فقط'
+            : 'This portal is restricted to authorized system administrators',
+          'error'
+        );
+      }
+
       setActiveView(view);
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     },
-    [recordProductView, currentUser]
+    [
+      recordProductView,
+      currentUser,
+      canAccessSellerDashboard,
+      canAccessAdminDashboard,
+      lang,
+      showToast,
+    ]
   );
 
   // ============================================================================
@@ -818,13 +998,28 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           'success'
         );
 
-        const nextView =
-          pendingRedirectView ||
-          (profile.role === 'admin'
+        const fallbackRoleView: AppView =
+          profile.role === 'admin'
             ? 'admin-dashboard'
-            : profile.role === 'seller'
+            : profile.role === 'seller' && Boolean(profile.sellerId?.trim())
             ? 'seller-dashboard'
-            : 'home');
+            : 'home';
+
+        const nextView =
+          pendingRedirectView && isViewAuthorizedForProfile(pendingRedirectView, profile)
+            ? pendingRedirectView
+            : fallbackRoleView;
+
+        if (pendingRedirectView && !isViewAuthorizedForProfile(pendingRedirectView, profile)) {
+          showToast(
+            lang === 'ar' ? 'غير مصرح بالوصول للواجهة المطلوبة' : 'Unauthorized Portal Access',
+            lang === 'ar'
+              ? 'تم توجيهك إلى الواجهة المناسبة لصلاحيات حسابك'
+              : 'Redirected to the portal matching your account role',
+            'info'
+          );
+        }
+
         setPendingRedirectView(null);
         setActiveView(nextView);
         return { success: true };
@@ -834,7 +1029,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         return { success: false, error: msg };
       }
     },
-    [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView]
+    [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView, isViewAuthorizedForProfile]
   );
 
   const registerWithEmail = useCallback(
@@ -896,7 +1091,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           'success'
         );
 
-        const nextView = pendingRedirectView || 'home';
+        const nextView =
+          pendingRedirectView && isViewAuthorizedForProfile(pendingRedirectView, newProfile)
+            ? pendingRedirectView
+            : 'home';
         setPendingRedirectView(null);
         setActiveView(nextView);
         return { success: true };
@@ -906,7 +1104,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         return { success: false, error: msg };
       }
     },
-    [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView]
+    [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView, isViewAuthorizedForProfile]
   );
 
   const sendPasswordReset = useCallback(
@@ -975,7 +1173,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
 
-      const nextView = pendingRedirectView || 'home';
+      const nextView =
+        pendingRedirectView && isViewAuthorizedForProfile(pendingRedirectView, profile)
+          ? pendingRedirectView
+          : 'home';
       setPendingRedirectView(null);
       setActiveView(nextView);
     } catch (err) {
@@ -986,7 +1187,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'error'
       );
     }
-  }, [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView]);
+  }, [lang, showToast, buildDefaultCustomerProfile, pendingRedirectView, isViewAuthorizedForProfile]);
 
   const registerAccount = useCallback(
     async (
@@ -1135,43 +1336,25 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const applyCouponCode = useCallback(
     (code: string): { success: boolean; message: string } => {
       const clean = code.trim().toUpperCase();
-      const found = coupons.find((c) => c.code.toUpperCase() === clean && c.isActive);
+      const found = coupons.find((c) => c.code.toUpperCase() === clean);
       if (!found) {
         const msg =
           lang === 'ar'
-            ? 'كود الخصم غير صحيح أو منتهي الصلاحية'
-            : 'Invalid or expired coupon code';
+            ? 'كود الخصم غير موجود. يرجى التحقق من الرمز والمحاولة مجدداً'
+            : 'Invalid coupon code. Please check the code and try again';
         showToast(msg, undefined, 'error');
         return { success: false, message: msg };
       }
 
-      const subtotal = cart.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-      if (subtotal < found.minOrderAmount) {
-        const msg =
-          lang === 'ar'
-            ? `الحد الأدنى لتفعيل الكوبون هو ${found.minOrderAmount} ر.س`
-            : `Minimum order of SAR ${found.minOrderAmount} required`;
-        showToast(msg, undefined, 'error');
-        return { success: false, message: msg };
-      }
-
-      if (found.sellerId && found.sellerId !== 'all') {
-        const hasSellerItem = cart.some((item) => item.product.sellerId === found.sellerId);
-        if (!hasSellerItem) {
-          const msg =
-            lang === 'ar'
-              ? `هذا الكوبون مخصص لمنتجات (${found.sellerNameAr}) فقط`
-              : `This coupon is valid only for ${found.sellerNameAr} items`;
-          showToast(msg, undefined, 'error');
-          return { success: false, message: msg };
-        }
+      const evaluation = evaluateCouponEligibility(found, cart, lang);
+      if (!evaluation.valid) {
+        showToast(evaluation.message, undefined, 'error');
+        return { success: false, message: evaluation.message };
       }
 
       setAppliedCoupon(found);
-      const okMsg =
-        lang === 'ar' ? `تم تطبيق الكوبون ${found.code} بنجاح!` : `Coupon ${found.code} applied!`;
-      showToast(okMsg, lang === 'ar' ? found.titleAr : found.titleEn, 'success');
-      return { success: true, message: okMsg };
+      showToast(evaluation.message, lang === 'ar' ? found.titleAr : found.titleEn, 'success');
+      return { success: true, message: evaluation.message };
     },
     [coupons, cart, lang, showToast]
   );
@@ -1181,7 +1364,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     showToast(lang === 'ar' ? 'تم إزالة الكوبون' : 'Coupon removed', undefined, 'info');
   }, [lang, showToast]);
 
-  // PHASE 7 — VAT-INCLUSIVE RETAIL PRICING CALCULATION
+  // PHASE 7 — VAT-INCLUSIVE RETAIL PRICING CALCULATION + COMPLETE COUPON VALIDATION
   // Product prices & shipping fees INCLUDE 15% Saudi VAT.
   // Included VAT portion = taxableAmount * 15 / 115 (never added twice).
   const cartSummary = useMemo(() => {
@@ -1189,19 +1372,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     const itemCount = cart.reduce((acc, item) => acc + item.quantity, 0);
 
     let discountAmount = 0;
-    if (appliedCoupon && subtotal >= appliedCoupon.minOrderAmount) {
-      const eligibleSubtotal =
-        appliedCoupon.sellerId && appliedCoupon.sellerId !== 'all'
-          ? cart
-              .filter((i) => i.product.sellerId === appliedCoupon.sellerId)
-              .reduce((acc, i) => acc + i.unitPrice * i.quantity, 0)
-          : subtotal;
+    const liveCoupon = appliedCoupon
+      ? coupons.find((c) => c.id === appliedCoupon.id) || appliedCoupon
+      : null;
 
-      if (appliedCoupon.type === 'percentage') {
-        const raw = (eligibleSubtotal * appliedCoupon.value) / 100;
-        discountAmount = appliedCoupon.maxDiscount ? Math.min(raw, appliedCoupon.maxDiscount) : raw;
-      } else {
-        discountAmount = Math.min(eligibleSubtotal, appliedCoupon.value);
+    if (liveCoupon) {
+      const check = evaluateCouponEligibility(liveCoupon, cart, lang);
+      if (check.valid) {
+        if (liveCoupon.type === 'percentage') {
+          const raw = (check.eligibleSubtotal * liveCoupon.value) / 100;
+          discountAmount = liveCoupon.maxDiscount ? Math.min(raw, liveCoupon.maxDiscount) : raw;
+        } else {
+          discountAmount = Math.min(check.eligibleSubtotal, liveCoupon.value);
+        }
       }
     }
 
@@ -1226,7 +1409,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       itemCount,
       pointsEarned,
     };
-  }, [cart, appliedCoupon, homepageConfig.freeShippingThreshold]);
+  }, [cart, appliedCoupon, coupons, lang, homepageConfig.freeShippingThreshold]);
 
   // Wishlist & Compare
   const toggleWishlist = useCallback(
@@ -1306,6 +1489,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         setPendingRedirectView('checkout');
         setActiveView('login');
         return null;
+      }
+
+      // Re-validate applied coupon before finalizing order
+      const liveCoupon = appliedCoupon
+        ? coupons.find((c) => c.id === appliedCoupon.id) || appliedCoupon
+        : null;
+      if (liveCoupon) {
+        const couponCheck = evaluateCouponEligibility(liveCoupon, cart, lang);
+        if (!couponCheck.valid) {
+          setAppliedCoupon(null);
+          showToast(couponCheck.message, undefined, 'error');
+          return null;
+        }
       }
 
       // Calculate VAT-inclusive final shipping & total
@@ -1394,6 +1590,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         try {
           await setDoc(doc(db, 'orders', newOrder.id), newOrder);
           await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+          // Safely increment coupon usedCount on real purchase
+          if (liveCoupon && cartSummary.discountAmount > 0) {
+            await updateDoc(doc(db, 'coupons', liveCoupon.id), {
+              usedCount: liveCoupon.usedCount + 1,
+            });
+          }
         } catch (err) {
           logFirestoreFailure(err, OperationType.CREATE, 'orders');
           showToast(
@@ -1405,6 +1607,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           );
           return null;
         }
+      }
+
+      // Increment coupon usage in local state (for both real orders and isolated Demo Mode)
+      if (liveCoupon && cartSummary.discountAmount > 0) {
+        setCoupons((prev) =>
+          prev.map((c) => (c.id === liveCoupon.id ? { ...c, usedCount: c.usedCount + 1 } : c))
+        );
       }
 
       // Update local state after successful persistence (or in Demo Mode)
@@ -1463,6 +1672,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       cart,
       cartSummary,
       appliedCoupon,
+      coupons,
       currentUser,
       isDemoMode,
       formatPrice,
@@ -1476,16 +1686,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     async (orderId: string, reason: string) => {
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
+      const nowIso = new Date().toISOString();
       const updated: Order = {
         ...target,
         status: 'cancelled',
         cancelReason: reason,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso,
       };
 
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'orders', orderId), updated);
+          await updateDoc(doc(db, 'orders', orderId), {
+            status: 'cancelled',
+            cancelReason: reason,
+            updatedAt: nowIso,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'orders');
           showToast(
@@ -1520,23 +1735,29 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     ) => {
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
+      const nowIso = new Date().toISOString();
+      const returnReq = {
+        reasonAr,
+        reasonEn: reasonAr,
+        details,
+        refundMethod,
+        requestedAt: nowIso,
+        status: 'pending' as const,
+      };
       const updated: Order = {
         ...target,
         status: 'return_requested',
-        returnRequest: {
-          reasonAr,
-          reasonEn: reasonAr,
-          details,
-          refundMethod,
-          requestedAt: new Date().toISOString(),
-          status: 'pending',
-        },
-        updatedAt: new Date().toISOString(),
+        returnRequest: returnReq,
+        updatedAt: nowIso,
       };
 
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'orders', orderId), updated);
+          await updateDoc(doc(db, 'orders', orderId), {
+            status: 'return_requested',
+            returnRequest: returnReq,
+            updatedAt: nowIso,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'orders');
           showToast(
@@ -1695,21 +1916,40 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const submitReview = useCallback(
     async (productId: string, rating: number, title: string, comment: string) => {
       if (!currentUser) {
-        showToast(lang === 'ar' ? 'يرجى تسجيل الدخول لإضافة تقييم' : 'Please sign in to submit a review', undefined, 'error');
+        showToast(
+          lang === 'ar' ? 'يرجى تسجيل الدخول لإضافة تقييم' : 'Please sign in to submit a review',
+          undefined,
+          'error'
+        );
         return;
       }
+
+      const effectiveUserId = isDemoMode
+        ? currentUser.id
+        : auth.currentUser?.uid || currentUser.id;
+
+      // Determine whether the customer actually has a DELIVERED order containing this product
+      const deliveredOrder = orders.find(
+        (o) =>
+          o.customerId === effectiveUserId &&
+          o.status === 'delivered' &&
+          o.items.some((item) => item.productId === productId)
+      );
+      const isVerifiedBuyer = Boolean(deliveredOrder);
+
       const targetProd = products.find((p) => p.id === productId);
       const newRev: Review = {
         id: `rev-${Date.now()}`,
         productId,
         productTitleAr: targetProd?.titleAr || '',
         productTitleEn: targetProd?.titleEn || '',
-        userId: isDemoMode ? currentUser.id : auth.currentUser?.uid || currentUser.id,
+        userId: effectiveUserId,
         userName: currentUser.name,
-        rating,
-        title,
-        comment,
-        verifiedPurchase: true,
+        rating: Math.min(5, Math.max(1, rating)),
+        title: title.trim(),
+        comment: comment.trim(),
+        verifiedPurchase: isVerifiedBuyer,
+        ...(isVerifiedBuyer && deliveredOrder ? { verifiedOrderId: deliveredOrder.id } : {}),
         helpfulCount: 1,
         createdAt: new Date().toISOString().split('T')[0],
         status: 'approved',
@@ -1720,19 +1960,35 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           await setDoc(doc(db, 'reviews', newRev.id), newRev);
         } catch (e) {
           logFirestoreFailure(e, OperationType.CREATE, 'reviews');
-          showToast(lang === 'ar' ? 'تعذر نشر التقييم' : 'Failed to publish review', undefined, 'error');
+          showToast(
+            lang === 'ar' ? 'تعذر نشر التقييم' : 'Failed to publish review',
+            undefined,
+            'error'
+          );
           return;
         }
       }
 
       setReviews((prev) => [newRev, ...prev]);
       showToast(
-        lang === 'ar' ? 'شكراً لتقييمك! تمت إضافة التقييم الموثق' : 'Verified Review Published!',
-        undefined,
+        isVerifiedBuyer
+          ? lang === 'ar'
+            ? 'شكراً لتقييمك! تمت إضافة التقييم بشارة (مشتري موثق)'
+            : 'Verified Purchase Review Published!'
+          : lang === 'ar'
+          ? 'شكراً لمشاركتك! تم نشر تقييمك العام للمنتج'
+          : 'Public Member Review Published!',
+        isVerifiedBuyer
+          ? lang === 'ar'
+            ? 'تم التحقق من استلامك الفعلي لهذا المنتج'
+            : 'Verified against your delivered order history'
+          : lang === 'ar'
+          ? 'يظهر التقييم بدون شارة شراء موثق لعدم وجود طلب مُسلّم لهذا المنتج'
+          : 'Displayed without Verified Buyer badge as no delivered order was found',
         'success'
       );
     },
-    [products, currentUser, isDemoMode, lang, showToast]
+    [products, orders, currentUser, isDemoMode, lang, showToast]
   );
 
   const submitQuestion = useCallback(
@@ -1986,20 +2242,33 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = orders.find((o) => o.id === orderId);
       if (!target) return;
-      const nowDate = new Date().toISOString().split('T')[0];
+      const nowIso = new Date().toISOString();
+      const nowDate = nowIso.split('T')[0];
+      const nextTracking = trackingNumber || target.trackingNumber;
+      const nextTimeline = buildOrderTimeline(newStatus, nowDate);
       const updated: Order = {
         ...target,
         status: newStatus,
-        trackingNumber: trackingNumber || target.trackingNumber,
-        timeline: buildOrderTimeline(newStatus, nowDate),
-        updatedAt: new Date().toISOString(),
+        trackingNumber: nextTracking,
+        timeline: nextTimeline,
+        updatedAt: nowIso,
       };
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'orders', orderId), updated);
+          // Only update fulfillment fields permitted by Firestore seller/admin order rules
+          await updateDoc(doc(db, 'orders', orderId), {
+            status: newStatus,
+            trackingNumber: nextTracking,
+            timeline: nextTimeline,
+            updatedAt: nowIso,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'orders');
-          showToast(lang === 'ar' ? 'تعذر تحديث حالة الطلب' : 'Failed to update order status', undefined, 'error');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث حالة الطلب' : 'Failed to update order status',
+            undefined,
+            'error'
+          );
           return;
         }
       }
@@ -2149,11 +2418,99 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     [currentUser, isDemoMode, lang, showToast]
   );
 
+  const updateSellerProfile = useCallback(
+    async (
+      sellerId: string,
+      safeUpdates: Partial<
+        Pick<
+          Seller,
+          | 'nameAr'
+          | 'nameEn'
+          | 'descriptionAr'
+          | 'descriptionEn'
+          | 'cityAr'
+          | 'cityEn'
+          | 'phone'
+          | 'email'
+          | 'iban'
+          | 'ownerName'
+          | 'categories'
+          | 'crNumber'
+          | 'vatNumber'
+        >
+      >
+    ) => {
+      if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) {
+        showToast(lang === 'ar' ? 'غير مصرح بهذا الإجراء' : 'Unauthorized action', undefined, 'error');
+        return;
+      }
+      if (currentUser.role === 'seller' && currentUser.sellerId !== sellerId) {
+        showToast(
+          lang === 'ar' ? 'لا يمكنك تعديل بيانات متجر آخر' : 'Cannot modify another seller profile',
+          undefined,
+          'error'
+        );
+        return;
+      }
+      const target = sellers.find((s) => s.id === sellerId);
+      if (!target) return;
+
+      // Strictly whitelist only safe business/profile fields; never allow financial or approval fields
+      const allowedPayload: Record<string, unknown> = {};
+      const allowedKeys = [
+        'nameAr',
+        'nameEn',
+        'descriptionAr',
+        'descriptionEn',
+        'cityAr',
+        'cityEn',
+        'phone',
+        'email',
+        'iban',
+        'ownerName',
+        'categories',
+        'crNumber',
+        'vatNumber',
+      ] as const;
+
+      for (const key of allowedKeys) {
+        if (safeUpdates[key] !== undefined) {
+          allowedPayload[key] = safeUpdates[key];
+        }
+      }
+
+      if (!isDemoMode) {
+        try {
+          await updateDoc(doc(db, 'sellers', sellerId), allowedPayload);
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
+          showToast(
+            lang === 'ar' ? 'تعذر تحديث بيانات المتجر' : 'Failed to update seller profile',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setSellers((prev) =>
+        prev.map((s) => (s.id === sellerId ? ({ ...s, ...allowedPayload } as Seller) : s))
+      );
+      showToast(
+        lang === 'ar' ? 'تم تحديث بيانات المتجر بنجاح' : 'Seller Profile Updated',
+        undefined,
+        'success'
+      );
+    },
+    [currentUser, isDemoMode, sellers, lang, showToast]
+  );
+
   const requestSellerPayout = useCallback(
     async (sellerId: string, amount: number) => {
       if (!currentUser || (currentUser.role !== 'seller' && currentUser.role !== 'admin')) return;
       const target = sellers.find((s) => s.id === sellerId);
       if (!target || amount <= 0 || amount > target.availableBalance) return;
+
       const updated: Seller = {
         ...target,
         availableBalance: target.availableBalance - amount,
@@ -2170,15 +2527,61 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           ...target.payoutHistory,
         ],
       };
+
       if (!isDemoMode) {
-        try {
-          await setDoc(doc(db, 'sellers', sellerId), updated);
-        } catch (e) {
-          logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
-          showToast(lang === 'ar' ? 'تعذر طلب تحويل الأرباح' : 'Failed to request payout', undefined, 'error');
-          return;
+        if (currentUser.role === 'admin') {
+          try {
+            await setDoc(doc(db, 'sellers', sellerId), updated);
+          } catch (e) {
+            logFirestoreFailure(e, OperationType.UPDATE, 'sellers');
+            showToast(
+              lang === 'ar' ? 'تعذر تنفيذ تسوية الأرباح' : 'Failed to process payout',
+              undefined,
+              'error'
+            );
+            return;
+          }
+        } else {
+          // Sellers cannot directly modify authoritative financial balances in Firestore (`sellers/{sellerId}`);
+          // submit a formal settlement request ticket for Admin/backend treasury execution.
+          try {
+            const payoutTicket: SupportTicket = {
+              id: `tkt-payout-${Date.now()}`,
+              ticketNumber: `PAY-${Math.floor(1000 + Math.random() * 9000)}`,
+              userId: auth.currentUser?.uid || currentUser.id,
+              userName: currentUser.name,
+              userEmail: currentUser.email,
+              categoryAr: 'تسوية الأرباح والتحويلات البنكية (سار)',
+              categoryEn: 'Merchant Payout Settlement (SARIE)',
+              subject: `طلب تحويل أرباح متجر (${target.nameAr}) بمبلغ ${amount} ر.س`,
+              message: `طلب تسوية رصيد متاح بقيمة ${amount} ر.س إلى الحساب البنكي المعتمد (${target.iban}).`,
+              status: 'open',
+              createdAt: new Date().toISOString().split('T')[0],
+            };
+            await setDoc(doc(db, 'tickets', payoutTicket.id), payoutTicket);
+            setTickets((prev) => [payoutTicket, ...prev]);
+            showToast(
+              lang === 'ar'
+                ? `تم رفع طلب تسوية الأرباح (${formatPrice(amount)}) للإدارة المالية`
+                : `Payout Request (${formatPrice(amount)}) Submitted to Treasury`,
+              lang === 'ar'
+                ? 'الأرصدة المالية محمية وتتم تسويتها واعتمادها عبر الإدارة المالية ونظام سار'
+                : 'Financial balances are protected and settled by Executive Treasury',
+              'success'
+            );
+            return;
+          } catch (e) {
+            logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+            showToast(
+              lang === 'ar' ? 'تعذر إرسال طلب تحويل الأرباح' : 'Failed to submit payout request',
+              undefined,
+              'error'
+            );
+            return;
+          }
         }
       }
+
       setSellers((prev) => prev.map((s) => (s.id === sellerId ? updated : s)));
       showToast(
         lang === 'ar'
@@ -2378,6 +2781,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     currentUser,
     isAuthLoading,
     isDemoMode,
+    canAccessSellerDashboard,
+    canAccessAdminDashboard,
     exitDemoMode,
     loginWithDemoRole,
     loginWithEmail,
@@ -2459,6 +2864,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     saveCoupon,
     toggleCouponStatus,
     submitSellerApplication,
+    updateSellerProfile,
     requestSellerPayout,
     updateSellerStatus,
     moderateProduct,

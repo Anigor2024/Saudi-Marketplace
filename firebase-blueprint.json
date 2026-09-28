@@ -125,6 +125,7 @@
         "title": { "type": "string" },
         "comment": { "type": "string" },
         "verifiedPurchase": { "type": "boolean" },
+        "verifiedOrderId": { "type": "string" },
         "createdAt": { "type": "string" },
         "status": { "type": "string", "enum": ["approved", "pending", "hidden"] }
       },
@@ -140,6 +141,7 @@
         "email": { "type": "string" },
         "phone": { "type": "string" },
         "role": { "type": "string", "enum": ["customer", "seller", "admin"] },
+        "sellerId": { "type": "string" },
         "walletBalance": { "type": "number" },
         "loyaltyPoints": { "type": "number" },
         "referralCode": { "type": "string" }

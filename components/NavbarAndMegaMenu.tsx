@@ -50,6 +50,8 @@ export function NavbarAndMegaMenu() {
     currentUser,
     isAuthLoading,
     isDemoMode,
+    canAccessSellerDashboard,
+    canAccessAdminDashboard,
     exitDemoMode,
     loginWithDemoRole,
     logout,
@@ -427,7 +429,7 @@ export function NavbarAndMegaMenu() {
           {/* Right Action Bar: Role Portal Button, Notifications, Compare, Wishlist, Account, Cart */}
           <div className="flex items-center gap-2 sm:gap-2.5">
             {/* Role Specific Dashboard Shortcut */}
-            {currentUser?.role === 'seller' && (
+            {canAccessSellerDashboard && (
               <button
                 type="button"
                 onClick={() => navigateTo('seller-dashboard')}
@@ -442,7 +444,7 @@ export function NavbarAndMegaMenu() {
               </button>
             )}
 
-            {currentUser?.role === 'admin' && (
+            {canAccessAdminDashboard && (
               <button
                 type="button"
                 onClick={() => navigateTo('admin-dashboard')}
@@ -826,7 +828,9 @@ export function NavbarAndMegaMenu() {
                       setMobileMenuOpen(false);
                     }}
                     className={`py-1.5 rounded text-xs font-semibold ${
-                      currentUser?.role === 'customer' ? 'bg-[#C59B27] text-black' : 'bg-white/10'
+                      isDemoMode && currentUser?.role === 'customer'
+                        ? 'bg-[#C59B27] text-black'
+                        : 'bg-white/10'
                     }`}
                   >
                     {t('عميل', 'Customer')}
@@ -838,7 +842,9 @@ export function NavbarAndMegaMenu() {
                       setMobileMenuOpen(false);
                     }}
                     className={`py-1.5 rounded text-xs font-semibold ${
-                      currentUser?.role === 'seller' ? 'bg-[#C59B27] text-black' : 'bg-white/10'
+                      isDemoMode && currentUser?.role === 'seller'
+                        ? 'bg-[#C59B27] text-black'
+                        : 'bg-white/10'
                     }`}
                   >
                     {t('تاجر', 'Seller')}
@@ -850,7 +856,9 @@ export function NavbarAndMegaMenu() {
                       setMobileMenuOpen(false);
                     }}
                     className={`py-1.5 rounded text-xs font-semibold ${
-                      currentUser?.role === 'admin' ? 'bg-[#C59B27] text-black' : 'bg-white/10'
+                      isDemoMode && currentUser?.role === 'admin'
+                        ? 'bg-[#C59B27] text-black'
+                        : 'bg-white/10'
                     }`}
                   >
                     {t('إدارة', 'Admin')}

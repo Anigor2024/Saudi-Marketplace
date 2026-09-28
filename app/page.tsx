@@ -75,11 +75,14 @@ function MarketplaceShell() {
     compareIds,
     clearCompare,
     orders,
+    reviews,
     cancelOrder,
     requestReturn,
     currentUser,
     isAuthLoading,
     isDemoMode,
+    canAccessSellerDashboard,
+    canAccessAdminDashboard,
     exitDemoMode,
     loginWithDemoRole,
     logout,
@@ -87,6 +90,7 @@ function MarketplaceShell() {
     setDefaultAddress,
     deleteAddress,
     submitSellerApplication,
+    submitReview,
     toasts,
     dismissToast,
   } = useMarketplace();
@@ -94,6 +98,10 @@ function MarketplaceShell() {
   const [couponInput, setCouponInput] = useState('');
   const [selectedVariantsState, setSelectedVariantsState] = useState<Record<string, string>>({});
   const [productQty, setProductQty] = useState<number>(1);
+  const [reviewRating, setReviewRating] = useState<number>(5);
+  const [reviewTitle, setReviewTitle] = useState<string>('');
+  const [reviewComment, setReviewComment] = useState<string>('');
+  const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
 
   // Account & Seller Application form state
   const [profileName, setProfileName] = useState<string | null>(null);
@@ -183,7 +191,11 @@ function MarketplaceShell() {
       <main className="flex-1">
         {/* Global Auth Status Loading Guard for Protected Routes */}
         {isAuthLoading &&
-        (activeView === 'checkout' || activeView === 'orders' || activeView === 'account') ? (
+        (activeView === 'checkout' ||
+          activeView === 'orders' ||
+          activeView === 'account' ||
+          activeView === 'seller-dashboard' ||
+          activeView === 'admin-dashboard') ? (
           <div className="max-w-[1440px] mx-auto px-4 lg:px-8 py-20 flex flex-col items-center justify-center gap-3">
             <Loader2 className="w-8 h-8 text-[#0B4F3F] animate-spin" />
             <p className="text-xs font-bold text-[#57534E]">
@@ -553,6 +565,161 @@ function MarketplaceShell() {
                           }`}
                         />
                       </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Product Reviews & Verified Purchase Verification Section */}
+                <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 lg:p-8 space-y-6">
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#F3EFEA] pb-4">
+                    <div>
+                      <h2 className="text-lg font-bold text-[#141413]">
+                        {t('تقييمات وتجارب العملاء', 'Customer Reviews & Verification')}
+                      </h2>
+                      <p className="text-xs text-[#57534E] mt-0.5">
+                        {t(
+                          'تُمنح شارة (مشتري موثق) تلقائياً فقط للعملاء الذين أتموا شراء واستلام المنتج فعلياً',
+                          'The Verified Buyer badge is granted only to customers with a delivered order containing this product'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    {/* Add Review Form */}
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (!reviewComment.trim()) return;
+                        setIsSubmittingReview(true);
+                        await submitReview(
+                          currentProduct.id,
+                          reviewRating,
+                          reviewTitle.trim() ||
+                            (lang === 'ar' ? 'تجربة اقتناء مميزة' : 'Great Luxury Experience'),
+                          reviewComment.trim()
+                        );
+                        setIsSubmittingReview(false);
+                        setReviewTitle('');
+                        setReviewComment('');
+                      }}
+                      className="lg:col-span-5 p-5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-3.5 self-start"
+                    >
+                      <h3 className="text-sm font-bold text-[#141413]">
+                        {t('أضف تقييمك لهذا المنتج', 'Write a Product Review')}
+                      </h3>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#141413] mb-1">
+                          {t('درجة التقييم', 'Rating')}
+                        </label>
+                        <div className="flex items-center gap-1.5">
+                          {[1, 2, 3, 4, 5].map((num) => (
+                            <button
+                              key={num}
+                              type="button"
+                              onClick={() => setReviewRating(num)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border ${
+                                reviewRating >= num
+                                  ? 'bg-[#C59B27] text-[#141413] border-[#C59B27]'
+                                  : 'bg-white text-[#8C857B] border-[#E6E0D6]'
+                              }`}
+                            >
+                              {num} ★
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#141413] mb-1">
+                          {t('عنوان التقييم', 'Review Title')}
+                        </label>
+                        <input
+                          type="text"
+                          value={reviewTitle}
+                          onChange={(e) => setReviewTitle(e.target.value)}
+                          placeholder={t('مثال: جودة استثنائية وتغليف ملكي', 'Review headline')}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-[#E6E0D6] text-xs"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#141413] mb-1">
+                          {t('تفاصيل تجربتك', 'Your Review Comment')}
+                        </label>
+                        <textarea
+                          rows={3}
+                          required
+                          value={reviewComment}
+                          onChange={(e) => setReviewComment(e.target.value)}
+                          placeholder={t(
+                            'شارك رأيك حول جودة المنتج ومطابقته للمواصفات...',
+                            'Share your thoughts on product quality and authenticity...'
+                          )}
+                          className="w-full px-3 py-2 rounded-xl bg-white border border-[#E6E0D6] text-xs"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={isSubmittingReview}
+                        className="w-full py-2.5 px-4 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] disabled:opacity-60 text-white text-xs font-bold"
+                      >
+                        {isSubmittingReview
+                          ? t('جاري النشر...', 'Publishing...')
+                          : t('نشر التقييم الآن', 'Publish Review')}
+                      </button>
+                    </form>
+
+                    {/* Existing Product Reviews List */}
+                    <div className="lg:col-span-7 space-y-3">
+                      {reviews.filter((r) => r.productId === currentProduct.id && r.status === 'approved')
+                        .length === 0 ? (
+                        <div className="p-8 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-center text-xs text-[#57534E]">
+                          {t(
+                            'كن أول من يشارك تجربته حول هذا المنتج الفاخر.',
+                            'Be the first to review this luxury item.'
+                          )}
+                        </div>
+                      ) : (
+                        reviews
+                          .filter((r) => r.productId === currentProduct.id && r.status === 'approved')
+                          .map((rev) => (
+                            <div
+                              key={rev.id}
+                              className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-2"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-[#141413]">
+                                    {rev.userName}
+                                  </span>
+                                  {rev.verifiedPurchase ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] text-[10px] font-bold">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      <span>{t('مشتري موثق', 'Verified Purchase')}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#F3EFEA] text-[#57534E] text-[10px] font-semibold">
+                                      <span>{t('تقييم عضو عام', 'Member Review')}</span>
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs font-mono font-bold text-[#B8860B]">
+                                  {'★'.repeat(rev.rating)} ({rev.rating}/5)
+                                </span>
+                              </div>
+                              {rev.title && (
+                                <div className="text-xs font-bold text-[#141413]">{rev.title}</div>
+                              )}
+                              <p className="text-xs text-[#57534E] leading-relaxed">{rev.comment}</p>
+                              <div className="text-[10px] font-mono text-[#8C857B]">
+                                {rev.createdAt}
+                              </div>
+                            </div>
+                          ))
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1331,32 +1498,146 @@ function MarketplaceShell() {
                     )}
 
                     {activeView !== 'wishlist' && activeView !== 'compare' && (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
-                          <div className="text-xs text-[#8C857B]">
-                            {t('إجمالي المنتجات النشطة', 'Total Active Products')}
+                      <>
+                        {((activeView === 'seller-dashboard' && !canAccessSellerDashboard) ||
+                          (activeView === 'admin-dashboard' && !canAccessAdminDashboard)) ? (
+                          <div
+                            role="alert"
+                            className="p-8 rounded-2xl bg-[#FAF8F5] border border-[#9E2A2B]/30 space-y-5"
+                          >
+                            <div className="flex items-start gap-3.5">
+                              <div className="w-11 h-11 rounded-xl bg-red-50 border border-[#9E2A2B]/30 text-[#9E2A2B] flex items-center justify-center shrink-0">
+                                <Lock className="w-5 h-5" />
+                              </div>
+                              <div className="space-y-1.5">
+                                <div className="inline-flex items-center gap-2">
+                                  <span className="px-2.5 py-0.5 rounded bg-red-50 text-[#9E2A2B] text-[11px] font-bold font-mono">
+                                    403 ACCESS DENIED
+                                  </span>
+                                  {currentUser && (
+                                    <span className="px-2.5 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] text-[11px] font-bold uppercase">
+                                      {t('دورك الحالي:', 'Current Role:')} {currentUser.role}
+                                    </span>
+                                  )}
+                                </div>
+                                <h2 className="text-lg font-bold text-[#141413]">
+                                  {activeView === 'admin-dashboard'
+                                    ? t(
+                                        'غير مصرح بالوصول إلى لوحة الإدارة التنفيذية',
+                                        'Access Restricted: Executive Admin Console'
+                                      )
+                                    : t(
+                                        'غير مصرح بالوصول إلى مركز التجار المعتمدين',
+                                        'Access Restricted: Verified Seller Center'
+                                      )}
+                                </h2>
+                                <p className="text-xs text-[#57534E] leading-relaxed max-w-2xl">
+                                  {activeView === 'admin-dashboard'
+                                    ? t(
+                                        'تتطلب لوحة الإدارة التنفيذية حساب مسؤول نظام معتمد بصلاحية (admin). لا يُسمح للعملاء أو التجار بالدخول إلى بوابة الحوكمة والإدارة.',
+                                        'The Executive Admin Console requires an authorized Administrator session (role == "admin"). Customers and Sellers are prohibited from accessing platform governance.'
+                                      )
+                                    : t(
+                                        'يتطلب دخول مركز التجار حساب تاجر معتمد من الإدارة (role == "seller") ومرتبطاً بمعرّف متجر موثق (sellerId). إذا كنت عميلاً وترغب بالبيع في أثيل، يمكنك رفع طلب اعتماد متجر من صفحة حسابك.',
+                                        'The Seller Center requires an approved Seller account (role == "seller") linked to a valid sellerId. Customers wishing to sell can submit a Seller Application from their Account page.'
+                                      )}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3 pt-2">
+                              <button
+                                type="button"
+                                onClick={() => navigateTo('home')}
+                                className="px-5 py-2.5 rounded-xl bg-[#0B4F3F] text-white text-xs font-bold"
+                              >
+                                {t('العودة للصفحة الرئيسية', 'Return to Homepage')}
+                              </button>
+
+                              {activeView === 'seller-dashboard' &&
+                                currentUser?.role === 'customer' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => navigateTo('account')}
+                                    className="px-5 py-2.5 rounded-xl bg-white border border-[#E6E0D6] hover:border-[#0B4F3F] text-xs font-bold text-[#141413]"
+                                  >
+                                    {t(
+                                      'الذهاب لحسابي لتقديم طلب اعتماد تاجر',
+                                      'Go to Account to Submit Seller Application'
+                                    )}
+                                  </button>
+                                )}
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  loginWithDemoRole(
+                                    activeView === 'admin-dashboard' ? 'admin' : 'seller'
+                                  )
+                                }
+                                className="px-4 py-2.5 rounded-xl bg-[#FBF7EC] border border-[#C59B27]/40 text-xs font-bold text-[#141413]"
+                              >
+                                {activeView === 'admin-dashboard'
+                                  ? t(
+                                      'معاينة الواجهة عبر (إدارة تجريبية Demo Admin)',
+                                      'Preview in Isolated Demo Admin Mode'
+                                    )
+                                  : t(
+                                      'معاينة الواجهة عبر (تاجر تجريبي Demo Seller)',
+                                      'Preview in Isolated Demo Seller Mode'
+                                    )}
+                              </button>
+                            </div>
                           </div>
-                          <div className="text-xl font-bold font-mono text-[#141413] mt-1">
-                            {products.length}
+                        ) : (
+                          <div className="space-y-4">
+                            {isDemoMode && (
+                              <div className="p-3.5 rounded-xl bg-[#FBF7EC] border border-[#C59B27]/40 flex items-center justify-between gap-3 text-xs text-[#141413]">
+                                <span className="font-semibold">
+                                  {t(
+                                    'وضع العرض التجريبي المحلي (Demo Mode): جميع الإجراءات هنا محلية لأغراض استعراض المشروع ولا تعدّل قاعدة بيانات الإنتاج.',
+                                    'Isolated Local Demo Mode: Actions here are simulated in memory for portfolio evaluation and never modify production Firestore.'
+                                  )}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={exitDemoMode}
+                                  className="px-3 py-1 rounded-lg bg-[#141413] text-[#F5E6C8] text-[11px] font-bold shrink-0"
+                                >
+                                  {t('إنهاء العرض التجريبي', 'Exit Demo Mode')}
+                                </button>
+                              </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                              <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
+                                <div className="text-xs text-[#8C857B]">
+                                  {t('إجمالي المنتجات النشطة', 'Total Active Products')}
+                                </div>
+                                <div className="text-xl font-bold font-mono text-[#141413] mt-1">
+                                  {products.length}
+                                </div>
+                              </div>
+                              <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
+                                <div className="text-xs text-[#8C857B]">
+                                  {t('المتاجر السعودية الموثقة', 'Verified Saudi Sellers')}
+                                </div>
+                                <div className="text-xl font-bold font-mono text-[#141413] mt-1">
+                                  {sellers.length}
+                                </div>
+                              </div>
+                              <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
+                                <div className="text-xs text-[#8C857B]">
+                                  {t('إجمالي الطلبات المسجلة', 'Total Orders')}
+                                </div>
+                                <div className="text-xl font-bold font-mono text-[#141413] mt-1">
+                                  {orders.length}
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                        <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
-                          <div className="text-xs text-[#8C857B]">
-                            {t('المتاجر السعودية الموثقة', 'Verified Saudi Sellers')}
-                          </div>
-                          <div className="text-xl font-bold font-mono text-[#141413] mt-1">
-                            {sellers.length}
-                          </div>
-                        </div>
-                        <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6]">
-                          <div className="text-xs text-[#8C857B]">
-                            {t('إجمالي الطلبات المسجلة', 'Total Orders')}
-                          </div>
-                          <div className="text-xl font-bold font-mono text-[#141413] mt-1">
-                            {orders.length}
-                          </div>
-                        </div>
-                      </div>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
