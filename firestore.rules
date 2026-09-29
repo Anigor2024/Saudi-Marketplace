@@ -487,6 +487,15 @@ service cloud.firestore {
           isAdmin() ||
           (
             isOwner(userId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'name',
+              'email',
+              'phone',
+              'avatar',
+              'addresses',
+              'wishlist',
+              'preferences'
+            ])
             && request.resource.data.id == resource.data.id
             && request.resource.data.role == resource.data.role
             && request.resource.data.get('sellerId', null) == resource.data.get('sellerId', null)
@@ -495,6 +504,8 @@ service cloud.firestore {
             && request.resource.data.get('loyaltyPoints', 0) == resource.data.get('loyaltyPoints', 0)
             && request.resource.data.get('loyaltyTier', 'Silver') == resource.data.get('loyaltyTier', 'Silver')
             && request.resource.data.get('loyaltyHistory', []) == resource.data.get('loyaltyHistory', [])
+            && request.resource.data.get('referralCode', '') == resource.data.get('referralCode', '')
+            && request.resource.data.get('createdAt', '') == resource.data.get('createdAt', '')
             && (!('wishlist' in request.resource.data) || (request.resource.data.wishlist is list && request.resource.data.wishlist.size() <= 200))
           )
         );

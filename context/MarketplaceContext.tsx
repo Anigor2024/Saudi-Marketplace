@@ -2337,10 +2337,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
       showToast(
-        lang === 'ar' ? 'تم تسجيل طلب الإرجاع بنجاح' : 'Return Request Submitted',
+        lang === 'ar' ? 'تم تسجيل طلب الإرجاع بنجاح' : 'Return Request Recorded Successfully',
         lang === 'ar'
-          ? 'سيتواصل معك مندوب سبل لاستلام الشحنة من عنوانك الوطني مجاناً'
-          : 'Courier pickup scheduled free of charge',
+          ? 'تم تسجيل طلب الإرجاع بنجاح. سيتم تأكيد ترتيبات استلام الشحنة بعد معالجة الطلب من نظام التنفيذ والشحن الموثوق.'
+          : 'Return request recorded successfully. Pickup arrangements require confirmation by the trusted fulfillment and carrier service.',
         'success'
       );
     },
@@ -2364,7 +2364,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+          await updateDoc(doc(db, 'users', updatedUser.id), {
+            addresses: nextAddresses,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'users');
           showToast(
@@ -2396,7 +2398,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+          await updateDoc(doc(db, 'users', updatedUser.id), {
+            addresses: nextAddresses,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'users');
           showToast(lang === 'ar' ? 'تعذر حذف العنوان' : 'Failed to delete address', undefined, 'error');
@@ -2421,7 +2425,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
+          await updateDoc(doc(db, 'users', updatedUser.id), {
+            addresses: nextAddresses,
+          });
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'users');
           showToast(
@@ -2446,17 +2452,34 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const updateUserProfile = useCallback(
     async (updates: Partial<UserProfile>) => {
       if (!currentUser) return;
-      // Never allow role or sellerId escalation via client profile update
-      const safeUpdates = { ...updates };
-      delete safeUpdates.role;
-      delete safeUpdates.sellerId;
-      delete safeUpdates.id;
+      // Strict Customer Profile Whitelist:
+      // Only allow legitimate profile-owned fields (name, email, phone, avatar, addresses, wishlist, preferences)
+      const allowedKeys = [
+        'name',
+        'email',
+        'phone',
+        'avatar',
+        'addresses',
+        'wishlist',
+        'preferences',
+      ] as const;
+      const allowedProfileUpdates: Record<string, unknown> = {};
+      for (const key of allowedKeys) {
+        if (updates[key] !== undefined) {
+          allowedProfileUpdates[key] = updates[key];
+        }
+      }
 
-      const updated: UserProfile = { ...currentUser, ...safeUpdates };
+      const updated: UserProfile = {
+        ...currentUser,
+        ...(allowedProfileUpdates as Partial<UserProfile>),
+      };
 
       if (!isDemoMode) {
         try {
-          await setDoc(doc(db, 'users', updated.id), updated);
+          if (Object.keys(allowedProfileUpdates).length > 0) {
+            await updateDoc(doc(db, 'users', updated.id), allowedProfileUpdates);
+          }
         } catch (e) {
           logFirestoreFailure(e, OperationType.UPDATE, 'users');
           showToast(
