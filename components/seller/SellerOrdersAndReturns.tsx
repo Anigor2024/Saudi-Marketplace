@@ -217,8 +217,9 @@ export default function SellerOrdersAndReturns({
     const tracking =
       trackingInputs[order.id]?.trim() ||
       sf.trackingNumber ||
-      (nextStatus === 'shipped' || nextStatus === 'out_for_delivery' || nextStatus === 'delivered'
-        ? `${chosenCarrier.prefix}-${Math.floor(10000000 + Math.random() * 89999999)}SA`
+      (isDemoMode &&
+      (nextStatus === 'shipped' || nextStatus === 'out_for_delivery' || nextStatus === 'delivered')
+        ? `SIM-${chosenCarrier.prefix}-${Math.floor(10000000 + Math.random() * 89999999)}SA`
         : '');
     const note = noteInputs[order.id]?.trim() || '';
 
@@ -845,14 +846,14 @@ export default function SellerOrdersAndReturns({
                                     const pfx = SAUDI_CARRIERS[cIdx]?.prefix || 'SPL';
                                     setTrackingInputs((prev) => ({
                                       ...prev,
-                                      [order.id]: `${pfx}-${Math.floor(
+                                      [order.id]: `SIM-${pfx}-${Math.floor(
                                         10000000 + Math.random() * 89999999
                                       )}SA`,
                                     }));
                                   }}
                                   className="px-3 py-2 rounded-xl bg-[#FAF8F5] hover:bg-[#EBF3F0] border border-[#E6E0D6] text-[11px] font-bold text-[#0B4F3F] disabled:opacity-50"
                                 >
-                                  {t('توليد بوليصة', 'Auto-Gen')}
+                                  {t('توليد تتبع محاكى (SIM)', 'Simulated Waybill (SIM)')}
                                 </button>
                               </div>
                             </div>

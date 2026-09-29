@@ -1340,6 +1340,14 @@ export function OrderConfirmationView() {
               </span>
               <span className="uppercase font-mono">{order.paymentMethod}</span> ·{' '}
               <span className="font-mono">{order.paymentReference}</span>
+              {order.paymentMethod !== 'cod' && (
+                <span className="block text-[10px] text-[#F5E6C8]/80 mt-0.5">
+                  {t(
+                    'مرجع دفع محاكى للعرض — يتطلب بوابة دفع خلفية موثوقة في الإنتاج الفعلي',
+                    'Portfolio Mock Payment Reference — Requires trusted payment gateway in production'
+                  )}
+                </span>
+              )}
             </div>
             <div>
               <span className="text-[#C59B27] block font-semibold">

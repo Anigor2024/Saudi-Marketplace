@@ -205,7 +205,13 @@ export default function SellerCenter() {
       return p.stock > criticalLimit && p.stock <= p.lowStockThreshold;
     });
 
-    const newPlacedOrders = sellerOrders.filter((o) => o.status === 'placed');
+    const newPlacedOrders = sellerOrders.filter((o) => {
+      const sf = sellerFulfillments.find(
+        (f) => f.orderId === o.id && f.sellerId === activeSeller.id
+      );
+      if (sf) return sf.status === 'confirmed';
+      return o.status === 'placed' || o.status === 'confirmed';
+    });
     const unansweredQuestions = sellerQuestions.filter((q) => !q.answerAr);
 
     return {
@@ -226,7 +232,7 @@ export default function SellerCenter() {
       newPlacedCount: newPlacedOrders.length,
       unansweredCount: unansweredQuestions.length,
     };
-  }, [activeSeller, sellerProducts, sellerOrders, sellerQuestions]);
+  }, [activeSeller, sellerProducts, sellerOrders, sellerQuestions, sellerFulfillments]);
 
   // Deterministic Seller-Scoped Category Analytics
   // Prefers actual seller order items (mapping item.productId -> seller's catalog product categoryId)

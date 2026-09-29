@@ -47,10 +47,16 @@ export default function AdminOrdersReturnsCustomers({
     adjustCustomerWalletAndLoyalty,
   } = useMarketplace();
 
-  const getExpectedSellerIds = (order: Order): string[] =>
-    order.sellerIds && order.sellerIds.length > 0
-      ? order.sellerIds
-      : Array.from(new Set(order.items.map((item) => item.sellerId)));
+  const getExpectedSellerIds = (order: Order): string[] => {
+    const itemSellerIds = Array.from(
+      new Set(
+        order.items
+          .map((item) => item.sellerId)
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      )
+    );
+    return itemSellerIds.length > 0 ? itemSellerIds : order.sellerIds || [];
+  };
 
   const getMissingFulfillmentsCount = (order: Order): number => {
     const expected = getExpectedSellerIds(order);

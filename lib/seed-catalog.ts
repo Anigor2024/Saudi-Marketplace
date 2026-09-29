@@ -1856,16 +1856,33 @@ function mapOrderToSellerFulfillmentStatus(status: OrderStatus): SellerFulfillme
 }
 
 export function buildSellerFulfillmentsForOrder(order: Order): SellerFulfillment[] {
+  const itemSellers = Array.from(
+    new Set(
+      order.items
+        .map((item) => item.sellerId)
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    )
+  );
   const uniqueSellers =
-    order.sellerIds && order.sellerIds.length > 0
-      ? order.sellerIds
-      : Array.from(new Set(order.items.map((item) => item.sellerId)));
+    itemSellers.length > 0
+      ? itemSellers
+      : (order.sellerIds || []).filter(
+          (id): id is string => typeof id === 'string' && id.trim().length > 0
+        );
 
   const baseDate = (order.updatedAt || order.createdAt || '2026-09-27').split('T')[0];
 
-  return uniqueSellers.map((sellerId, idx) => {
+  const fulfillments: SellerFulfillment[] = [];
+  uniqueSellers.forEach((sellerId, idx) => {
     const sellerItems = order.items.filter((item) => item.sellerId === sellerId);
-    const sellerItemProductIds = Array.from(new Set(sellerItems.map((item) => item.productId)));
+    const sellerItemProductIds = Array.from(
+      new Set(
+        sellerItems
+          .map((item) => item.productId)
+          .filter((pid): pid is string => typeof pid === 'string' && pid.trim().length > 0)
+      )
+    );
+    if (sellerItemProductIds.length === 0) return;
 
     // For multi-vendor order ord-97610, seller-3 is delivered while seller-5 is still preparing
     let fulfillmentStatus: SellerFulfillmentStatus = mapOrderToSellerFulfillmentStatus(order.status);
@@ -1883,13 +1900,12 @@ export function buildSellerFulfillmentsForOrder(order: Order): SellerFulfillment
     const sellerCarrierEn =
       idx === 0 ? order.carrierEn || 'SPL Express VIP' : 'Aramex Premium';
 
-    return {
+    fulfillments.push({
       id: `${order.id}_${sellerId}`,
       orderId: order.id,
       sellerId,
       customerId: order.customerId,
-      sellerItemProductIds:
-        sellerItemProductIds.length > 0 ? sellerItemProductIds : [...order.productIds],
+      sellerItemProductIds,
       status: fulfillmentStatus,
       trackingNumber: sellerTracking,
       carrierAr: sellerCarrierAr,
@@ -1897,8 +1913,10 @@ export function buildSellerFulfillmentsForOrder(order: Order): SellerFulfillment
       timeline: buildOrderTimeline(fulfillmentStatus, baseDate),
       createdAt: order.createdAt,
       updatedAt: order.updatedAt || order.createdAt,
-    };
+    });
   });
+
+  return fulfillments;
 }
 
 export const INITIAL_SELLER_FULFILLMENTS: SellerFulfillment[] = INITIAL_ORDERS.flatMap((order) =>

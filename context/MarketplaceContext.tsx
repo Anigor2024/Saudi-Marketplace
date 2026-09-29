@@ -665,8 +665,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         email: email.trim().toLowerCase(),
         phone: phone.trim() || '+966 50 000 0000',
         role: 'customer',
-        walletBalance: 250,
-        loyaltyPoints: 1000,
+        walletBalance: 0,
+        loyaltyPoints: 0,
         loyaltyTier: 'Silver',
         referralCode: `ATH-${uid.slice(0, 5).toUpperCase()}`,
         wishlist: ['prod-1', 'prod-5'],
@@ -678,15 +678,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             phone: phone.trim() || '+966 50 000 0000',
           },
         ],
-        loyaltyHistory: [
-          {
-            id: `lh-welcome-${uid.slice(0, 6)}`,
-            titleAr: 'مكافأة الترحيب بالعضوية الجديدة في أثيل',
-            titleEn: 'Atheel New Member Welcome Privilege',
-            points: 1000,
-            date: new Date().toISOString().split('T')[0],
-          },
-        ],
+        loyaltyHistory: [],
         preferences: {
           newsletter: true,
           smsAlerts: true,
@@ -808,7 +800,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
             return numA - numB;
           });
-          setProducts(list);
+          const publicIds = new Set(list.map((p) => p.id));
+          setProducts((prev) => {
+            const preservedNonPublic = prev.filter(
+              (p) =>
+                !publicIds.has(p.id) &&
+                p.status !== 'active' &&
+                p.status !== 'out_of_stock'
+            );
+            return [...list, ...preservedNonPublic];
+          });
         }
         setIsLoadingData(false);
       },
@@ -822,7 +823,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       query(collection(db, 'coupons'), where('isActive', '==', true)),
       (snap) => {
         if (!snap.empty) {
-          setCoupons(snap.docs.map((d) => d.data() as Coupon));
+          const publicList = snap.docs.map((d) => d.data() as Coupon);
+          const publicIds = new Set(publicList.map((c) => c.id));
+          setCoupons((prev) => {
+            const preservedInactive = prev.filter(
+              (c) => !publicIds.has(c.id) && !c.isActive
+            );
+            return [...publicList, ...preservedInactive];
+          });
         }
       },
       (err) => logFirestoreFailure(err, OperationType.LIST, 'coupons')
@@ -942,9 +950,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubAllReviews = onSnapshot(
         collection(db, 'reviews'),
         (snap) => {
-          if (!snap.empty) {
-            setReviews(snap.docs.map((d) => d.data() as Review));
-          }
+          setReviews(snap.docs.map((d) => d.data() as Review));
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'reviews')
       );
@@ -978,9 +984,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubAllCoupons = onSnapshot(
         collection(db, 'coupons'),
         (snap) => {
-          if (!snap.empty) {
-            setCoupons(snap.docs.map((d) => d.data() as Coupon));
-          }
+          setCoupons(snap.docs.map((d) => d.data() as Coupon));
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'coupons')
       );
@@ -1013,6 +1017,32 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         (err) => logFirestoreFailure(err, OperationType.GET, `sellers/${sellerDocId}`)
       );
 
+      unsubAllProducts = onSnapshot(
+        query(collection(db, 'products'), where('sellerId', '==', sellerDocId)),
+        (snap) => {
+          if (!snap.empty) {
+            const sellerItems = snap.docs.map((d) => d.data() as Product);
+            setProducts((prev) => {
+              const otherSellers = prev.filter((p) => p.sellerId !== sellerDocId);
+              return [...sellerItems, ...otherSellers];
+            });
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'products')
+      );
+
+      unsubAllCoupons = onSnapshot(
+        query(collection(db, 'coupons'), where('sellerId', '==', sellerDocId)),
+        (snap) => {
+          const sellerCouponList = snap.docs.map((d) => d.data() as Coupon);
+          setCoupons((prev) => {
+            const otherCoupons = prev.filter((c) => c.sellerId !== sellerDocId);
+            return [...sellerCouponList, ...otherCoupons];
+          });
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'coupons')
+      );
+
       unsubOrders = onSnapshot(
         query(collection(db, 'orders'), where('sellerIds', 'array-contains', currentUser.sellerId)),
         (snap) => {
@@ -1035,7 +1065,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       );
 
       unsubAllTickets = onSnapshot(
-        query(collection(db, 'tickets'), where('userId', '==', auth.currentUser.uid)),
+        query(collection(db, 'tickets'), where('sellerId', '==', currentUser.sellerId)),
         (snap) => {
           setTickets(snap.docs.map((d) => d.data() as SupportTicket));
         },
@@ -1943,9 +1973,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         address,
         deliverySpeed,
         paymentMethod,
-        paymentReference: `${paymentMethod.toUpperCase()}-SA-${Math.floor(
-          1000000 + Math.random() * 9000000
-        )}`,
+        paymentReference: isDemoMode
+          ? `SIM-${paymentMethod.toUpperCase()}-SA-${Math.floor(1000000 + Math.random() * 9000000)}`
+          : paymentMethod === 'cod'
+          ? 'COD-PAY-ON-DELIVERY'
+          : `MOCK-${paymentMethod.toUpperCase()}-AWAITING-PROVIDER`,
         subtotal: cartSummary.subtotal,
         discountAmount: cartSummary.discountAmount,
         couponCode: appliedCoupon?.code || '',
@@ -1954,7 +1986,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         total: finalTotal,
         status: 'confirmed',
         trackingNumber: isDemoMode
-          ? `SPL-${Math.floor(100000000 + Math.random() * 900000000)}SA`
+          ? `SIM-SPL-${Math.floor(100000000 + Math.random() * 900000000)}SA`
           : '',
         carrierAr: deliverySpeed === 'express' ? 'سبل إكسبريس VIP' : 'أرامكس بريميوم',
         carrierEn: deliverySpeed === 'express' ? 'SPL Express VIP' : 'Aramex Premium',
@@ -1963,34 +1995,38 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         updatedAt: nowIso,
       };
 
-      const updatedUser: UserProfile = {
-        ...currentUser,
-        walletBalance:
-          paymentMethod === 'wallet'
-            ? Math.max(0, Number((currentUser.walletBalance - finalTotal).toFixed(2)))
-            : currentUser.walletBalance,
-        loyaltyPoints: currentUser.loyaltyPoints + Math.floor(finalTotal / 5),
-        loyaltyHistory: [
-          {
-            id: `lh-${Date.now()}`,
-            titleAr: `مكافأة شراء طلب #${orderNum}`,
-            titleEn: `Purchase Reward Order #${orderNum}`,
-            points: Math.floor(finalTotal / 5),
-            date: nowIso.split('T')[0],
-          },
-          ...currentUser.loyaltyHistory,
-        ],
-      };
+      // In Demo Mode, simulate wallet deduction and loyalty point accrual locally.
+      // In Production, walletBalance and loyaltyPoints are strictly immutable from client writes
+      // in firestore.rules and require a trusted backend / payment service.
+      const updatedUser: UserProfile = isDemoMode
+        ? {
+            ...currentUser,
+            walletBalance:
+              paymentMethod === 'wallet'
+                ? Math.max(0, Number((currentUser.walletBalance - finalTotal).toFixed(2)))
+                : currentUser.walletBalance,
+            loyaltyPoints: currentUser.loyaltyPoints + Math.floor(finalTotal / 5),
+            loyaltyHistory: [
+              {
+                id: `lh-${Date.now()}`,
+                titleAr: `مكافأة شراء طلب #${orderNum}`,
+                titleEn: `Purchase Reward Order #${orderNum}`,
+                points: Math.floor(finalTotal / 5),
+                date: nowIso.split('T')[0],
+              },
+              ...currentUser.loyaltyHistory,
+            ],
+          }
+        : currentUser;
 
       // Persist to Firestore if not in Demo Mode
       if (!isDemoMode) {
         try {
           await setDoc(doc(db, 'orders', newOrder.id), newOrder);
-          await setDoc(doc(db, 'users', updatedUser.id), updatedUser);
-          // SECURITY NOTE: Authoritative coupon `usedCount` redemption is intentionally NOT persisted
-          // directly from an untrusted browser client to prevent coupon exhaustion attacks.
-          // In production, authoritative coupon redemption (`usedCount + 1`) must be processed
-          // atomically by a trusted backend / Cloud Function together with server-validated order creation.
+          // SECURITY NOTE: Authoritative coupon `usedCount` redemption, wallet debit, and loyalty point
+          // accrual are intentionally NOT persisted directly from an untrusted browser client.
+          // In production, authoritative coupon redemption, payment verification, and fulfillment
+          // provisioning must be processed atomically by a trusted backend / Cloud Function.
         } catch (err) {
           logFirestoreFailure(err, OperationType.CREATE, 'orders');
           showToast(
@@ -5227,21 +5263,36 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       const nowIso = new Date().toISOString();
       const nowDate = nowIso.split('T')[0];
-      const uniqueSellers =
-        targetOrder.sellerIds && targetOrder.sellerIds.length > 0
-          ? targetOrder.sellerIds
-          : Array.from(new Set(targetOrder.items.map((item) => item.sellerId)));
 
-      const derivedCandidates: SellerFulfillment[] = uniqueSellers.map((sellerId) => {
+      // Authoritative portfolio provisioning candidates MUST be derived from targetOrder.items[].sellerId
+      // rather than blindly trusting an arbitrary order.sellerIds array.
+      const itemSellerIds = Array.from(
+        new Set(
+          targetOrder.items
+            .map((item) => item.sellerId)
+            .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        )
+      );
+
+      const derivedCandidates: SellerFulfillment[] = [];
+      for (const sellerId of itemSellerIds) {
         const sellerItems = targetOrder.items.filter((item) => item.sellerId === sellerId);
-        const sellerItemProductIds = Array.from(new Set(sellerItems.map((item) => item.productId)));
-        return {
+        const sellerItemProductIds = Array.from(
+          new Set(
+            sellerItems
+              .map((item) => item.productId)
+              .filter((pid): pid is string => typeof pid === 'string' && pid.trim().length > 0)
+          )
+        );
+        // Each SellerFulfillment MUST have non-empty sellerItemProductIds containing ONLY that seller's product IDs.
+        if (sellerItemProductIds.length === 0) continue;
+
+        derivedCandidates.push({
           id: `${targetOrder.id}_${sellerId}`,
           orderId: targetOrder.id,
           sellerId,
           customerId: targetOrder.customerId,
-          sellerItemProductIds:
-            sellerItemProductIds.length > 0 ? sellerItemProductIds : [...targetOrder.productIds],
+          sellerItemProductIds,
           status: 'confirmed',
           trackingNumber: '',
           carrierAr: targetOrder.carrierAr || 'سبل إكسبريس VIP',
@@ -5249,8 +5300,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           timeline: buildOrderTimeline('confirmed', nowDate),
           createdAt: targetOrder.createdAt || nowIso,
           updatedAt: nowIso,
-        };
-      });
+        });
+      }
 
       // Filter out any fulfillment that already exists in state or in Firestore (NEVER overwrite existing fulfillments)
       const missingFulfillments: SellerFulfillment[] = [];

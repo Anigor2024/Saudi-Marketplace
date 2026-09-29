@@ -1503,10 +1503,20 @@ function MarketplaceShell() {
                 ) : (
                   <div className="space-y-4">
                     {orders.map((order) => {
+                      const itemSellerIds = Array.from(
+                        new Set(
+                          order.items
+                            .map((item) => item.sellerId)
+                            .filter(
+                              (id): id is string =>
+                                typeof id === 'string' && id.trim().length > 0
+                            )
+                        )
+                      );
                       const expectedSellerIds =
-                        order.sellerIds && order.sellerIds.length > 0
-                          ? order.sellerIds
-                          : Array.from(new Set(order.items.map((item) => item.sellerId)));
+                        itemSellerIds.length > 0
+                          ? itemSellerIds
+                          : order.sellerIds || [];
                       const liveOrderFulfillments = sellerFulfillments.filter(
                         (f) => f.orderId === order.id
                       );
