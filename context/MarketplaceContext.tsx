@@ -317,6 +317,7 @@ interface MarketplaceContextType {
   requestSellerPayout: (sellerId: string, amount: number) => Promise<void>;
 
   // Admin Actions
+  provisionSellerFulfillmentsForOrder: (orderId: string) => Promise<boolean>;
   updateSellerStatus: (sellerId: string, status: SellerStatus) => Promise<void>;
   updateSellerCommissionRate: (sellerId: string, commissionRate: number) => Promise<void>;
   toggleSellerVerification: (sellerId: string, verifiedBadge: boolean) => Promise<void>;
@@ -1952,7 +1953,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         vatAmount: finalVatAmount,
         total: finalTotal,
         status: 'confirmed',
-        trackingNumber: `SPL-${Math.floor(100000000 + Math.random() * 900000000)}SA`,
+        trackingNumber: isDemoMode
+          ? `SPL-${Math.floor(100000000 + Math.random() * 900000000)}SA`
+          : '',
         carrierAr: deliverySpeed === 'express' ? 'سبل إكسبريس VIP' : 'أرامكس بريميوم',
         carrierEn: deliverySpeed === 'express' ? 'SPL Express VIP' : 'Aramex Premium',
         timeline: buildOrderTimeline('confirmed', nowIso.split('T')[0]),
@@ -2047,8 +2050,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           type: 'order',
           titleAr: `تم تأكيد طلبك #${orderNum} بنجاح`,
           titleEn: `Order #${orderNum} Confirmed`,
-          messageAr: `إجمالي الطلب ${formatPrice(finalTotal)} (شامل ضريبة القيمة المضافة ١٥٪). رقم التتبع: ${newOrder.trackingNumber}`,
-          messageEn: `Total ${formatPrice(finalTotal)} (incl. 15% VAT). Tracking: ${newOrder.trackingNumber}`,
+          messageAr: `إجمالي الطلب ${formatPrice(finalTotal)} (شامل ضريبة القيمة المضافة ١٥٪).${
+            newOrder.trackingNumber ? ` رقم التتبع: ${newOrder.trackingNumber}` : ''
+          }`,
+          messageEn: `Total ${formatPrice(finalTotal)} (incl. 15% VAT).${
+            newOrder.trackingNumber ? ` Tracking: ${newOrder.trackingNumber}` : ''
+          }`,
           read: false,
           linkView: 'orders',
           createdAt: lang === 'ar' ? 'الآن' : 'Just now',
@@ -2352,15 +2359,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         if (o.customerId !== effectiveUserId) return false;
         if (!Array.isArray(o.productIds) || !o.productIds.includes(productId)) return false;
         const matchingItem = o.items.find((it) => it.productId === productId);
-        const itemSellerId = matchingItem?.sellerId;
+        const itemSellerId = matchingItem?.sellerId || products.find((p) => p.id === productId)?.sellerId;
         const orderFulfillments = sellerFulfillments.filter((f) => f.orderId === o.id);
-        if (orderFulfillments.length > 0 && itemSellerId) {
+        if (itemSellerId) {
           const sellerFulfillment = orderFulfillments.find((f) => f.sellerId === itemSellerId);
           if (sellerFulfillment) {
             return sellerFulfillment.status === 'delivered';
           }
         }
-        return o.status === 'delivered';
+        const sellerCount =
+          o.sellerIds && o.sellerIds.length > 0
+            ? o.sellerIds.length
+            : new Set(o.items.map((it) => it.sellerId)).size;
+        return sellerCount <= 1 && o.status === 'delivered';
       });
       const isVerifiedBuyer = Boolean(deliveredOrder);
 
@@ -2439,16 +2450,22 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         );
         return;
       }
-      if (!currentUser) {
-        showToast(lang === 'ar' ? 'يرجى تسجيل الدخول لطرح سؤال' : 'Please sign in to ask a question', undefined, 'error');
+      if (!currentUser || (!isDemoMode && !auth.currentUser)) {
+        showToast(
+          lang === 'ar' ? 'يرجى تسجيل الدخول لطرح سؤال' : 'Please sign in to ask a question',
+          undefined,
+          'error'
+        );
         return;
       }
+      const effectiveUserId = isDemoMode ? currentUser.id : auth.currentUser!.uid;
       const newQ: ProductQuestion = {
         id: `qa-${Date.now()}`,
         productId,
+        userId: effectiveUserId,
         userName: currentUser.name,
-        questionAr: questionText,
-        questionEn: questionText,
+        questionAr: questionText.trim(),
+        questionEn: questionText.trim(),
         createdAt: new Date().toISOString().split('T')[0],
       };
 
@@ -2925,11 +2942,23 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
 
       const fulfillmentId = `${orderId}_${effectiveSellerId}`;
-      const existingFulfillment =
-        sellerFulfillments.find((f) => f.id === fulfillmentId) ||
-        buildSellerFulfillmentsForOrder(targetOrder).find((f) => f.id === fulfillmentId);
+      // In Production, use ONLY real persisted Firestore sellerFulfillments.
+      // Never synthesize or fabricate fulfillment records in Production when missing.
+      const existingFulfillment = isDemoMode
+        ? sellerFulfillments.find((f) => f.id === fulfillmentId) ||
+          buildSellerFulfillmentsForOrder(targetOrder).find((f) => f.id === fulfillmentId)
+        : sellerFulfillments.find((f) => f.id === fulfillmentId);
 
-      if (!existingFulfillment) return;
+      if (!existingFulfillment) {
+        showToast(
+          lang === 'ar'
+            ? 'بانتظار تهيئة شحنات التجار من نظام تنفيذ الطلبات الموثوق'
+            : 'Awaiting trusted order-fulfillment provisioning',
+          undefined,
+          'error'
+        );
+        return;
+      }
 
       const nowIso = new Date().toISOString();
       const nowDate = nowIso.split('T')[0];
@@ -3409,6 +3438,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             await setDoc(doc(db, 'orders', orderId), cleanOrder);
           } catch (e) {
             logFirestoreFailure(e, OperationType.UPDATE, 'orders');
+            showToast(
+              lang === 'ar'
+                ? 'تعذر حفظ قرار فحص المرتجع في قاعدة البيانات'
+                : 'Failed to persist return inspection update to database',
+              undefined,
+              'error'
+            );
+            return;
           }
         } else if (currentUser.role === 'seller') {
           // Production seller submits an official return inspection ticket for Admin/Treasury final disposition
@@ -3419,6 +3456,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             await setDoc(doc(db, 'tickets', returnTicket.id), cleanTicket);
           } catch (e) {
             logFirestoreFailure(e, OperationType.CREATE, 'tickets');
+            showToast(
+              lang === 'ar'
+                ? 'تعذر إرسال تقرير فحص المرتجع إلى قاعدة البيانات'
+                : 'Failed to persist merchant return inspection ticket',
+              undefined,
+              'error'
+            );
+            return;
           }
         }
       }
@@ -5138,7 +5183,161 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     [currentUser, isDemoMode, addAuditLog, lang, showToast]
   );
 
-    const answerProductQuestion = useCallback(
+  const provisionSellerFulfillmentsForOrder = useCallback(
+    async (orderId: string): Promise<boolean> => {
+      if (!currentUser || currentUser.role !== 'admin') {
+        showToast(
+          lang === 'ar'
+            ? 'تهيئة شحنات التجار متاحة للإدارة التنفيذية فقط'
+            : 'Fulfillment provisioning is restricted to Admin only',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      let targetOrder = orders.find((o) => o.id === orderId);
+      if (!targetOrder && !isDemoMode) {
+        try {
+          const snap = await getDoc(doc(db, 'orders', orderId));
+          if (snap.exists()) {
+            targetOrder = snap.data() as Order;
+          }
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.GET, `orders/${orderId}`);
+          showToast(
+            lang === 'ar'
+              ? 'تعذر قراءة بيانات الطلب لتهيئة الشحنات'
+              : 'Failed to load order for fulfillment provisioning',
+            undefined,
+            'error'
+          );
+          return false;
+        }
+      }
+
+      if (!targetOrder) {
+        showToast(
+          lang === 'ar' ? 'الطلب غير موجود' : 'Order not found',
+          undefined,
+          'error'
+        );
+        return false;
+      }
+
+      const nowIso = new Date().toISOString();
+      const nowDate = nowIso.split('T')[0];
+      const uniqueSellers =
+        targetOrder.sellerIds && targetOrder.sellerIds.length > 0
+          ? targetOrder.sellerIds
+          : Array.from(new Set(targetOrder.items.map((item) => item.sellerId)));
+
+      const derivedCandidates: SellerFulfillment[] = uniqueSellers.map((sellerId) => {
+        const sellerItems = targetOrder.items.filter((item) => item.sellerId === sellerId);
+        const sellerItemProductIds = Array.from(new Set(sellerItems.map((item) => item.productId)));
+        return {
+          id: `${targetOrder.id}_${sellerId}`,
+          orderId: targetOrder.id,
+          sellerId,
+          customerId: targetOrder.customerId,
+          sellerItemProductIds:
+            sellerItemProductIds.length > 0 ? sellerItemProductIds : [...targetOrder.productIds],
+          status: 'confirmed',
+          trackingNumber: '',
+          carrierAr: targetOrder.carrierAr || 'سبل إكسبريس VIP',
+          carrierEn: targetOrder.carrierEn || 'SPL Express VIP',
+          timeline: buildOrderTimeline('confirmed', nowDate),
+          createdAt: targetOrder.createdAt || nowIso,
+          updatedAt: nowIso,
+        };
+      });
+
+      // Filter out any fulfillment that already exists in state or in Firestore (NEVER overwrite existing fulfillments)
+      const missingFulfillments: SellerFulfillment[] = [];
+      for (const candidate of derivedCandidates) {
+        const existsInState = sellerFulfillments.some((f) => f.id === candidate.id);
+        if (existsInState) continue;
+
+        if (!isDemoMode) {
+          try {
+            const existingSnap = await getDoc(doc(db, 'sellerFulfillments', candidate.id));
+            if (existingSnap.exists()) {
+              continue;
+            }
+          } catch (e) {
+            logFirestoreFailure(e, OperationType.GET, `sellerFulfillments/${candidate.id}`);
+            showToast(
+              lang === 'ar'
+                ? 'تعذر التحقق من سجلات شحنات التجار الحالية'
+                : 'Failed to verify existing seller fulfillment records',
+              undefined,
+              'error'
+            );
+            return false;
+          }
+        }
+        missingFulfillments.push(candidate);
+      }
+
+      if (missingFulfillments.length === 0) {
+        showToast(
+          lang === 'ar'
+            ? 'جميع شحنات التجار لهذا الطلب مهيأة مسبقاً'
+            : 'All seller fulfillments for this order are already provisioned',
+          undefined,
+          'info'
+        );
+        return true;
+      }
+
+      if (!isDemoMode) {
+        try {
+          const batch = writeBatch(db);
+          for (const fulfillment of missingFulfillments) {
+            batch.set(doc(db, 'sellerFulfillments', fulfillment.id), fulfillment);
+          }
+          await batch.commit();
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.CREATE, 'sellerFulfillments');
+          showToast(
+            lang === 'ar'
+              ? 'تعذر تهيئة شحنات التجار في قاعدة البيانات'
+              : 'Failed to provision seller fulfillments in database',
+            undefined,
+            'error'
+          );
+          return false;
+        }
+      }
+
+      setSellerFulfillments((prev) => {
+        const existingIds = new Set(prev.map((f) => f.id));
+        const toAdd = missingFulfillments.filter((f) => !existingIds.has(f.id));
+        return [...toAdd, ...prev];
+      });
+
+      await addAuditLog(
+        `تهيئة شحنات التجار (${missingFulfillments.length}) للطلب #${targetOrder.orderNumber} — محاكاة إدارية بديلة عن خدمة Backend الموثوقة`,
+        `Provisioned ${missingFulfillments.length} seller fulfillment(s) for Order #${targetOrder.orderNumber} (Portfolio Admin Stand-in for Trusted Backend)`,
+        'order',
+        targetOrder.id
+      );
+
+      showToast(
+        lang === 'ar'
+          ? `تمت تهيئة ${missingFulfillments.length} شحنات تجار للطلب #${targetOrder.orderNumber}`
+          : `Provisioned ${missingFulfillments.length} Seller Fulfillment(s) for #${targetOrder.orderNumber}`,
+        lang === 'ar'
+          ? 'حالة الشحنات الأولية: مؤكد (confirmed) — جاهزة لتحديثات التجار المعزولة'
+          : 'Initial status: confirmed — ready for isolated seller updates',
+        'success'
+      );
+      return true;
+    },
+    [currentUser, orders, sellerFulfillments, isDemoMode, addAuditLog, lang, showToast]
+  );
+
+  const answerProductQuestion = useCallback(
     async (questionId: string, answerText: string) => {
       if (!ensureActiveSellerOrAdmin() || !currentUser) return;
       const target = questions.find((q) => q.id === questionId);
@@ -5303,6 +5502,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     submitSellerApplication,
     updateSellerProfile,
     requestSellerPayout,
+    provisionSellerFulfillmentsForOrder,
     updateSellerStatus,
     updateSellerCommissionRate,
     toggleSellerVerification,

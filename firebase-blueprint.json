@@ -111,7 +111,9 @@
         "customerName": { "type": "string" },
         "customerEmail": { "type": "string" },
         "customerPhone": { "type": "string" },
+        "sellerIds": { "type": "array", "items": { "type": "string" } },
         "productIds": { "type": "array", "items": { "type": "string" } },
+        "items": { "type": "array", "items": { "type": "object" } },
         "subtotal": { "type": "number" },
         "discountAmount": { "type": "number" },
         "shippingFee": { "type": "number" },
@@ -233,6 +235,7 @@
       "properties": {
         "id": { "type": "string" },
         "productId": { "type": "string" },
+        "userId": { "type": "string" },
         "userName": { "type": "string" },
         "questionAr": { "type": "string" },
         "questionEn": { "type": "string" },
@@ -243,7 +246,7 @@
         "answeredAt": { "type": "string" },
         "createdAt": { "type": "string" }
       },
-      "required": ["id", "productId", "userName", "questionAr", "createdAt"]
+      "required": ["id", "productId", "userId", "userName", "questionAr", "createdAt"]
     },
     "SupportTicket": {
       "title": "SupportTicket",

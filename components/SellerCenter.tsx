@@ -1083,7 +1083,14 @@ export default function SellerCenter() {
                           ord.status === 'return_requested' ||
                           ord.status === 'returned'
                             ? ord.status
-                            : myFulfillment?.status || ord.status;
+                            : myFulfillment
+                            ? myFulfillment.status
+                            : isDemoMode
+                            ? ord.status
+                            : t(
+                                'بانتظار تهيئة شحنات التجار من نظام تنفيذ الطلبات الموثوق',
+                                'Awaiting trusted order-fulfillment provisioning'
+                              );
                         return (
                           <div
                             key={ord.id}

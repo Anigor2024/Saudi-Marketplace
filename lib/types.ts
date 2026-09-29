@@ -407,11 +407,8 @@ export function deriveAggregateOrderStatus(
       : Array.from(new Set(order.items.map((i) => i.sellerId)));
 
   if (orderFulfillments.length === 0) {
-    // If multi-vendor order has no fulfillment records yet, do not falsely claim 'delivered'
-    if (expectedSellerIds.length > 1 && order.status === 'delivered') {
-      return 'confirmed';
-    }
-    return order.status;
+    // When no fulfillment records exist yet, do not falsely claim 'delivered' or in-transit states
+    return order.status === 'placed' ? 'placed' : 'confirmed';
   }
 
   // Ensure every expected seller in the order is accounted for before claiming full progression
@@ -466,6 +463,7 @@ export interface Review {
 export interface ProductQuestion {
   id: string;
   productId: string;
+  userId: string;
   userName: string;
   questionAr: string;
   questionEn: string;

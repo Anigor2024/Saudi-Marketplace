@@ -1503,25 +1503,32 @@ function MarketplaceShell() {
                 ) : (
                   <div className="space-y-4">
                     {orders.map((order) => {
+                      const expectedSellerIds =
+                        order.sellerIds && order.sellerIds.length > 0
+                          ? order.sellerIds
+                          : Array.from(new Set(order.items.map((item) => item.sellerId)));
                       const liveOrderFulfillments = sellerFulfillments.filter(
                         (f) => f.orderId === order.id
                       );
-                      const effectiveFulfillments =
-                        liveOrderFulfillments.length > 0
+                      const effectiveFulfillments = isDemoMode
+                        ? liveOrderFulfillments.length > 0
                           ? liveOrderFulfillments
-                          : buildSellerFulfillmentsForOrder(order);
+                          : buildSellerFulfillmentsForOrder(order)
+                        : liveOrderFulfillments;
                       const derivedStatus = deriveAggregateOrderStatus(
                         order,
                         effectiveFulfillments
                       );
-                      const isMultiVendorOrder = effectiveFulfillments.length > 1;
+                      const isMultiVendorOrder = expectedSellerIds.length > 1;
                       const deliveredShipmentsCount = effectiveFulfillments.filter(
                         (f) => f.status === 'delivered'
                       ).length;
                       const isPartiallyDelivered =
                         isMultiVendorOrder &&
                         deliveredShipmentsCount > 0 &&
-                        deliveredShipmentsCount < effectiveFulfillments.length;
+                        deliveredShipmentsCount < expectedSellerIds.length;
+                      const isMissingFulfillmentProvisioning =
+                        effectiveFulfillments.length < expectedSellerIds.length;
 
                       return (
                         <div
@@ -1537,16 +1544,16 @@ function MarketplaceShell() {
                                 <span className="px-2.5 py-0.5 rounded-md bg-[#EBF3F0] text-[#0B4F3F] text-xs font-bold uppercase">
                                   {isPartiallyDelivered
                                     ? t(
-                                        `تسليم جزئي (${deliveredShipmentsCount}/${effectiveFulfillments.length} شحنات)`,
-                                        `Partially Delivered (${deliveredShipmentsCount}/${effectiveFulfillments.length} Shipments)`
+                                        `تسليم جزئي (${deliveredShipmentsCount}/${expectedSellerIds.length} شحنات)`,
+                                        `Partially Delivered (${deliveredShipmentsCount}/${expectedSellerIds.length} Shipments)`
                                       )
                                     : derivedStatus}
                                 </span>
                                 {isMultiVendorOrder && (
                                   <span className="px-2.5 py-0.5 rounded-md bg-[#FAF8F5] border border-[#E6E0D6] text-[11px] font-bold text-[#57534E]">
                                     {t(
-                                      `${effectiveFulfillments.length} شحنات مستقلة حسب البوتيك`,
-                                      `${effectiveFulfillments.length} Seller-Isolated Shipments`
+                                      `${expectedSellerIds.length} شحنات مستقلة حسب البوتيك`,
+                                      `${expectedSellerIds.length} Seller-Isolated Shipments`
                                     )}
                                   </span>
                                 )}
@@ -1569,28 +1576,47 @@ function MarketplaceShell() {
                             </div>
                           </div>
 
+                          {isMissingFulfillmentProvisioning && (
+                            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-xs text-[#92400E] flex flex-wrap items-center justify-between gap-3">
+                              <span className="font-bold">
+                                {t(
+                                  'بانتظار تهيئة شحنات التجار من نظام تنفيذ الطلبات الموثوق',
+                                  'Awaiting trusted order-fulfillment provisioning'
+                                )}
+                              </span>
+                              <span className="text-[11px] font-mono">
+                                {effectiveFulfillments.length}/{expectedSellerIds.length}
+                              </span>
+                            </div>
+                          )}
+
                           {/* Seller-Specific Shipments Breakdown */}
                           <div className="space-y-3">
-                            {effectiveFulfillments.map((shipment, sIdx) => {
-                              const shipmentItems = order.items.filter(
-                                (item) => item.sellerId === shipment.sellerId
+                            {expectedSellerIds.map((sellerId, sIdx) => {
+                              const shipment = effectiveFulfillments.find(
+                                (f) => f.sellerId === sellerId
                               );
-                              const sellerObj = sellers.find((s) => s.id === shipment.sellerId);
+                              const shipmentItems = order.items.filter(
+                                (item) => item.sellerId === sellerId
+                              );
+                              const sellerObj = sellers.find((s) => s.id === sellerId);
                               const sellerNameAr =
                                 sellerObj?.nameAr ||
                                 shipmentItems[0]?.sellerNameAr ||
-                                shipment.sellerId;
+                                sellerId;
                               const sellerNameEn =
                                 sellerObj?.nameEn ||
                                 shipmentItems[0]?.sellerNameEn ||
-                                shipment.sellerId;
-                              const latestEvent = [...(shipment.timeline || [])]
-                                .reverse()
-                                .find((ev) => ev.completed);
+                                sellerId;
+                              const latestEvent = shipment
+                                ? [...(shipment.timeline || [])]
+                                    .reverse()
+                                    .find((ev) => ev.completed)
+                                : undefined;
 
                               return (
                                 <div
-                                  key={shipment.id}
+                                  key={`${order.id}_${sellerId}`}
                                   className="rounded-xl border border-[#E6E0D6] bg-[#FAF8F5]/70 p-4 space-y-3"
                                 >
                                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E6E0D6] pb-2.5">
@@ -1602,33 +1628,50 @@ function MarketplaceShell() {
                                           `Shipment #${sIdx + 1}: ${sellerNameEn}`
                                         )}
                                       </span>
-                                      <span
-                                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                          shipment.status === 'delivered'
-                                            ? 'bg-[#EBF3F0] text-[#1E6B47]'
-                                            : shipment.status === 'shipped' ||
-                                              shipment.status === 'out_for_delivery'
-                                            ? 'bg-indigo-50 text-indigo-800'
-                                            : 'bg-[#FBF7EC] text-[#B8860B] border border-[#C59B27]/40'
-                                        }`}
-                                      >
-                                        {shipment.status}
-                                      </span>
+                                      {shipment ? (
+                                        <span
+                                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                            shipment.status === 'delivered'
+                                              ? 'bg-[#EBF3F0] text-[#1E6B47]'
+                                              : shipment.status === 'shipped' ||
+                                                shipment.status === 'out_for_delivery'
+                                              ? 'bg-indigo-50 text-indigo-800'
+                                              : 'bg-[#FBF7EC] text-[#B8860B] border border-[#C59B27]/40'
+                                          }`}
+                                        >
+                                          {shipment.status}
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-300 text-[#B45309] text-[10px] font-bold">
+                                          {t(
+                                            'بانتظار تهيئة شحنات التجار من نظام تنفيذ الطلبات الموثوق',
+                                            'Awaiting trusted order-fulfillment provisioning'
+                                          )}
+                                        </span>
+                                      )}
                                     </div>
 
-                                    <div className="flex flex-wrap items-center gap-3 text-[11px]">
-                                      <span className="text-[#57534E]">
-                                        {t('الناقل:', 'Carrier:')}{' '}
-                                        <strong className="text-[#141413]">
-                                          {lang === 'ar'
-                                            ? shipment.carrierAr
-                                            : shipment.carrierEn}
-                                        </strong>
-                                      </span>
-                                      <span className="px-2 py-0.5 rounded bg-white border border-[#E6E0D6] font-mono font-bold text-[#0B4F3F]">
-                                        {shipment.trackingNumber}
-                                      </span>
-                                    </div>
+                                    {shipment && (
+                                      <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                                        <span className="text-[#57534E]">
+                                          {t('الناقل:', 'Carrier:')}{' '}
+                                          <strong className="text-[#141413]">
+                                            {lang === 'ar'
+                                              ? shipment.carrierAr
+                                              : shipment.carrierEn}
+                                          </strong>
+                                        </span>
+                                        {shipment.trackingNumber ? (
+                                          <span className="px-2 py-0.5 rounded bg-white border border-[#E6E0D6] font-mono font-bold text-[#0B4F3F]">
+                                            {shipment.trackingNumber}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[#8C857B]">
+                                            {t('بانتظار إصدار البوليصة', 'Tracking pending dispatch')}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
 
                                   <div className="divide-y divide-[#E6E0D6]/60">

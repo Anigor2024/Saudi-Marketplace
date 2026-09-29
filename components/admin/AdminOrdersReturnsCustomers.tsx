@@ -36,14 +36,29 @@ export default function AdminOrdersReturnsCustomers({
     t,
     formatPrice,
     orders,
+    sellerFulfillments,
     sellers,
     users,
     tickets,
     updateOrderStatus,
+    provisionSellerFulfillmentsForOrder,
     cancelOrder,
     processReturnRequest,
     adjustCustomerWalletAndLoyalty,
   } = useMarketplace();
+
+  const getExpectedSellerIds = (order: Order): string[] =>
+    order.sellerIds && order.sellerIds.length > 0
+      ? order.sellerIds
+      : Array.from(new Set(order.items.map((item) => item.sellerId)));
+
+  const getMissingFulfillmentsCount = (order: Order): number => {
+    const expected = getExpectedSellerIds(order);
+    const existingSellerIds = new Set(
+      sellerFulfillments.filter((f) => f.orderId === order.id).map((f) => f.sellerId)
+    );
+    return expected.filter((sId) => !existingSellerIds.has(sId)).length;
+  };
 
   // ============================================================================
   // 1. ORDERS SUPERVISION STATE
@@ -564,13 +579,27 @@ export default function AdminOrdersReturnsCustomers({
                       </td>
 
                       <td className="py-4 px-4 text-end">
-                        <button
-                          type="button"
-                          onClick={() => openOrderInspector(order)}
-                          className="px-3 py-1.5 rounded-lg bg-[#FAF8F5] border border-[#E6E0D6] hover:border-[#0B4F3F] text-[#141413] text-[11px] font-bold whitespace-nowrap"
-                        >
-                          {t('فحص وتحديث الحالة', 'Inspect & Override')}
-                        </button>
+                        <div className="flex flex-col items-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openOrderInspector(order)}
+                            className="px-3 py-1.5 rounded-lg bg-[#FAF8F5] border border-[#E6E0D6] hover:border-[#0B4F3F] text-[#141413] text-[11px] font-bold whitespace-nowrap"
+                          >
+                            {t('فحص وتحديث الحالة', 'Inspect & Override')}
+                          </button>
+                          {getMissingFulfillmentsCount(order) > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => provisionSellerFulfillmentsForOrder(order.id)}
+                              className="px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-[#92400E] text-[10px] font-bold text-end max-w-[260px]"
+                            >
+                              {t(
+                                'تهيئة شحنات التجار — محاكاة إدارية بديلة عن خدمة Backend الموثوقة',
+                                'Provision Seller Fulfillments — Portfolio Admin Stand-in for Trusted Backend'
+                              )}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -693,6 +722,90 @@ export default function AdminOrdersReturnsCustomers({
                     </div>
                   ))}
                 </div>
+              </div>
+
+              {/* Seller-Specific Fulfillments Status & Admin Portfolio Provisioning */}
+              <div className="p-4 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] space-y-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-bold text-[#141413] flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-[#0B4F3F]" />
+                    <span>
+                      {t(
+                        'سجلات شحنات التجار المعزولة (sellerFulfillments)',
+                        'Isolated Seller Fulfillment Records (sellerFulfillments)'
+                      )}
+                    </span>
+                  </div>
+                  <span className="font-mono text-[11px] text-[#57534E]">
+                    {
+                      sellerFulfillments.filter((f) => f.orderId === inspectingOrder.id)
+                        .length
+                    }
+                    /{getExpectedSellerIds(inspectingOrder).length}
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  {getExpectedSellerIds(inspectingOrder).map((sId) => {
+                    const sf = sellerFulfillments.find(
+                      (f) => f.orderId === inspectingOrder.id && f.sellerId === sId
+                    );
+                    const sellerObj = sellers.find((s) => s.id === sId);
+                    const sLabel = sellerObj
+                      ? lang === 'ar'
+                        ? sellerObj.nameAr
+                        : sellerObj.nameEn
+                      : sId;
+                    return (
+                      <div
+                        key={sId}
+                        className="p-2.5 rounded-lg bg-white border border-[#E6E0D6] flex flex-wrap items-center justify-between gap-2"
+                      >
+                        <div>
+                          <span className="font-bold text-[#141413]">{sLabel}</span>
+                          <span className="text-[10px] font-mono text-[#8C857B] ms-2">
+                            ({inspectingOrder.id}_{sId})
+                          </span>
+                        </div>
+                        {sf ? (
+                          <div className="flex items-center gap-2 text-[11px]">
+                            <span className="px-2 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] font-bold uppercase">
+                              {sf.status}
+                            </span>
+                            <span className="font-mono text-[#57534E]">
+                              {sf.trackingNumber || '—'}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-300 text-[#B45309] text-[10px] font-bold">
+                            {t(
+                              'بانتظار تهيئة شحنات التجار من نظام تنفيذ الطلبات الموثوق',
+                              'Awaiting trusted order-fulfillment provisioning'
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {getMissingFulfillmentsCount(inspectingOrder) > 0 && (
+                  <div className="pt-2 border-t border-[#E6E0D6]">
+                    <button
+                      type="button"
+                      onClick={() => provisionSellerFulfillmentsForOrder(inspectingOrder.id)}
+                      className="w-full py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center justify-center gap-2"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>
+                        {t(
+                          'تهيئة شحنات التجار — محاكاة إدارية بديلة عن خدمة Backend الموثوقة',
+                          'Provision Seller Fulfillments — Portfolio Admin Stand-in for Trusted Backend'
+                        )}
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Admin Fulfillment Override Controls */}

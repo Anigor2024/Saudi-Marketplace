@@ -2065,6 +2065,7 @@ export const INITIAL_QUESTIONS: ProductQuestion[] = [
   {
     id: 'qa-1',
     productId: 'prod-1',
+    userId: 'user-customer-1',
     userName: 'عبدالعزيز السبيعي',
     questionAr: 'هل تأتي الساعة مع شهادة الضمان الدولي المختومة وصندوق الإهداء الرسمي؟',
     questionEn: 'Does the timepiece come with the stamped international warranty card and official presentation box?',
@@ -2079,6 +2080,7 @@ export const INITIAL_QUESTIONS: ProductQuestion[] = [
   {
     id: 'qa-2',
     productId: 'prod-9',
+    userId: 'user-customer-2',
     userName: 'ماجد الحربي',
     questionAr: 'هل الجوال نسخة الشرق الأوسط الرسمية ويدعم فيس تايم وشريحتين (Nano + eSIM)؟',
     questionEn: 'Is this the official Middle East version supporting FaceTime and Dual SIM (Nano + eSIM)?',
@@ -2093,6 +2095,7 @@ export const INITIAL_QUESTIONS: ProductQuestion[] = [
   {
     id: 'qa-3',
     productId: 'prod-5',
+    userId: 'user-customer-3',
     userName: 'سلطان العجمي',
     questionAr: 'هل دهن العود صافي بيور ١٠٠٪ بدون أي إضافات أو تخفيف؟',
     questionEn: 'Is the Cambodian Oud oil 100% pure artisanal distillation without dilution?',
@@ -2107,6 +2110,7 @@ export const INITIAL_QUESTIONS: ProductQuestion[] = [
   {
     id: 'qa-4',
     productId: 'prod-17',
+    userId: 'user-customer-1',
     userName: 'تركي بن فهد السديري',
     questionAr: 'هل لوحة المفاتيح في ماك بوك برو ١٦ إنش تأتي بحروف عربية وإنجليزية محفورة رسمياً من المصنع (لوحة مفاتيح الشرق الأوسط)؟',
     questionEn: 'Does the MacBook Pro 16" come with the factory-engraved Arabic/English bilingual keyboard (official Middle East layout)?',
@@ -2115,6 +2119,7 @@ export const INITIAL_QUESTIONS: ProductQuestion[] = [
   {
     id: 'qa-5',
     productId: 'prod-13',
+    userId: 'user-customer-2',
     userName: 'ريم بنت عبدالله التميمي',
     questionAr: 'هل السماعة تدعم الاقتران بجهازين في نفس الوقت (Multipoint Bluetooth) بين الآيفون والماك بوك؟',
     questionEn: 'Does this headphone support Multipoint Bluetooth connection to pair with both iPhone and MacBook simultaneously?',
@@ -2123,6 +2128,7 @@ export const INITIAL_QUESTIONS: ProductQuestion[] = [
   {
     id: 'qa-6',
     productId: 'prod-6',
+    userId: 'user-customer-3',
     userName: 'نواف بن خالد الشمري',
     questionAr: 'كم جرام وزن كسرات العود الموروكي السوبر في الصندوق الملكي وهل يناسب تبخير المجالس الكبيرة؟',
     questionEn: 'What is the exact weight in grams of the Super Moroccan Oud chips in the royal box, and is it suitable for large majlis halls?',

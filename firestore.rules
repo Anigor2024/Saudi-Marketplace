@@ -495,7 +495,10 @@ service cloud.firestore {
     // 4. ORDERS: Customer creates/reads own orders & updates ONLY cancellation/return request fields;
     // Seller may read orders containing their sellerId, but may NEVER update global Order status, tracking, carrier, or timeline
     // (Sellers must update their isolated `/sellerFulfillments/{orderId_sellerId}` record instead).
-    // `productIds` is immutable and cannot be modified by customers or sellers; Admin accesses all.
+    // `productIds` and `sellerIds` are immutable and cannot be modified by customers or sellers; Admin accesses all.
+    // Documented Trusted-Backend Boundary: Client-submitted order totals (subtotal, discountAmount, shippingFee, vatAmount, total)
+    // are validated as non-negative numbers here, while complete production-grade authoritative catalog pricing, coupon redemption,
+    // inventory mutation, payment verification, authoritative totals, and atomic order+fulfillment creation belong to a trusted backend.
     match /orders/{orderId} {
       allow create: if isSignedIn()
         && isValidId(orderId)
@@ -505,15 +508,25 @@ service cloud.firestore {
           || get(/databases/$(database)/documents/settings/publicPlatformSettings).data.checkoutEnabled == true
         )
         && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == 'confirmed'
         && isValidString(request.resource.data.orderNumber, 3, 60)
-        && isNonNegativeNumber(request.resource.data.total)
+        && isNonNegativeNumber(request.resource.data.subtotal)
+        && isNonNegativeNumber(request.resource.data.discountAmount)
+        && isNonNegativeNumber(request.resource.data.shippingFee)
         && isNonNegativeNumber(request.resource.data.vatAmount)
-        && request.resource.data.status in ['placed', 'confirmed']
+        && isNonNegativeNumber(request.resource.data.total)
         && !('returnRequest' in request.resource.data)
+        && request.resource.data.sellerIds is list
+        && request.resource.data.sellerIds.size() >= 1
+        && request.resource.data.sellerIds.size() <= 20
+        && request.resource.data.sellerIds[0] is string
         && request.resource.data.productIds is list
         && request.resource.data.productIds.size() >= 1
         && request.resource.data.productIds.size() <= 50
-        && request.resource.data.productIds[0] is string;
+        && request.resource.data.productIds[0] is string
+        && request.resource.data.items is list
+        && request.resource.data.items.size() >= 1
+        && request.resource.data.items.size() <= 50;
 
       allow read: if isSignedIn() && (
         resource.data.customerId == request.auth.uid
@@ -738,13 +751,17 @@ service cloud.firestore {
       allow delete: if isValidId(reviewId) && isAdmin();
     }
 
-    // 7. PRODUCT QUESTIONS: Public read; Authenticated user asks question (without pre-populating seller answer fields);
-    // Seller answers ONLY questions for products owned by their sellerId and modifies ONLY answer fields; Admin manages all.
+    // 7. PRODUCT QUESTIONS: Public read; Authenticated user asks question with `userId == request.auth.uid`
+    // (without pre-populating seller answer fields);
+    // Seller answers ONLY questions for products owned by their sellerId and modifies ONLY answer fields
+    // while keeping `userId`, `productId`, `userName`, `questionAr`, `questionEn`, `createdAt` immutable;
+    // Admin retains moderation authority.
     match /questions/{questionId} {
       allow read: if true;
 
       allow create: if isSignedIn()
         && isValidId(questionId)
+        && request.resource.data.userId == request.auth.uid
         && isValidString(request.resource.data.productId, 1, 100)
         && isValidString(request.resource.data.questionAr, 2, 800)
         && (
@@ -761,7 +778,6 @@ service cloud.firestore {
             && !('answeredByAr' in request.resource.data)
             && !('answeredByEn' in request.resource.data)
             && !('answeredAt' in request.resource.data)
-            && (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid)
           )
         );
 
@@ -769,6 +785,7 @@ service cloud.firestore {
         isAdmin()
         || (
           ownsProduct(resource.data.productId)
+          && request.resource.data.userId == resource.data.userId
           && request.resource.data.productId == resource.data.productId
           && request.resource.data.userName == resource.data.userName
           && request.resource.data.questionAr == resource.data.questionAr

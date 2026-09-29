@@ -1251,8 +1251,10 @@ export function OrderConfirmationView() {
     t,
     formatPrice,
     navigateTo,
+    isDemoMode,
     lastCreatedOrder,
     orders,
+    sellerFulfillments,
   } = useMarketplace();
 
   const order = lastCreatedOrder || orders[0] || null;
@@ -1277,6 +1279,11 @@ export function OrderConfirmationView() {
       </div>
     );
   }
+
+  const orderFulfillments = sellerFulfillments.filter((f) => f.orderId === order.id);
+  const displayTracking = isDemoMode
+    ? orderFulfillments[0]?.trackingNumber || order.trackingNumber
+    : orderFulfillments[0]?.trackingNumber || '';
 
   return (
     <div className="max-w-[1440px] mx-auto px-4 lg:px-8 py-10 space-y-8">
@@ -1313,8 +1320,19 @@ export function OrderConfirmationView() {
               <span className="text-[#C59B27] block font-semibold">
                 {t('رقم التتبع والناقل', 'Tracking & Carrier')}
               </span>
-              <span className="font-mono font-bold">{order.trackingNumber}</span> ·{' '}
-              <span>{lang === 'ar' ? order.carrierAr : order.carrierEn}</span>
+              {displayTracking ? (
+                <>
+                  <span className="font-mono font-bold">{displayTracking}</span> ·{' '}
+                  <span>{lang === 'ar' ? order.carrierAr : order.carrierEn}</span>
+                </>
+              ) : (
+                <span className="text-[#F5E6C8]">
+                  {t(
+                    'بانتظار تهيئة شحنات التجار من نظام تنفيذ الطلبات الموثوق',
+                    'Awaiting trusted order-fulfillment provisioning'
+                  )}
+                </span>
+              )}
             </div>
             <div>
               <span className="text-[#C59B27] block font-semibold">
