@@ -1281,9 +1281,19 @@ export function OrderConfirmationView() {
   }
 
   const orderFulfillments = sellerFulfillments.filter((f) => f.orderId === order.id);
+  const hasRealOrDemoFulfillment = isDemoMode || orderFulfillments.length > 0;
   const displayTracking = isDemoMode
     ? orderFulfillments[0]?.trackingNumber || order.trackingNumber
     : orderFulfillments[0]?.trackingNumber || '';
+  const displayCarrier = isDemoMode
+    ? lang === 'ar'
+      ? orderFulfillments[0]?.carrierAr || order.carrierAr
+      : orderFulfillments[0]?.carrierEn || order.carrierEn
+    : orderFulfillments.length > 0
+    ? lang === 'ar'
+      ? orderFulfillments[0]?.carrierAr || order.carrierAr
+      : orderFulfillments[0]?.carrierEn || order.carrierEn
+    : '';
 
   return (
     <div className="max-w-[1440px] mx-auto px-4 lg:px-8 py-10 space-y-8">
@@ -1291,23 +1301,29 @@ export function OrderConfirmationView() {
         {/* Top Confirmation Banner */}
         <div className="rounded-2xl bg-gradient-to-br from-[#0B4F3F] via-[#083B2F] to-[#141413] text-white p-8 border border-[#C59B27]/40 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="inline-flex items-center gap-2.5">
-              <div className="w-11 h-11 rounded-xl bg-[#C59B27] text-[#141413] flex items-center justify-center">
+            <div className="inline-flex items-start gap-2.5">
+              <div className="w-11 h-11 rounded-xl bg-[#C59B27] text-[#141413] flex items-center justify-center shrink-0">
                 <CheckCircle2 className="w-6 h-6" />
               </div>
               <div>
-                <div className="text-xs text-[#F5E6C8] font-medium">
-                  {t('تم استلام وتأكيد طلبك بنجاح', 'Order Confirmed & Tax Invoice Issued')}
+                <div className="text-xs text-[#F5E6C8] font-bold">
+                  {t('تم تسجيل الطلب بنجاح', 'Order Recorded Successfully')}
                 </div>
                 <h1 className="text-2xl font-bold font-mono text-white">
                   #{order.orderNumber}
                 </h1>
+                <p className="text-[11px] text-[#E6E0D6] mt-1 max-w-xl leading-relaxed">
+                  {t(
+                    'تم احتساب الضريبة ضمن ملخص الطلب. تهيئة الشحن والدفع الفعلي تتطلب الخدمات الخلفية الموثوقة.',
+                    'VAT is included in the order summary. Authoritative payment and shipment provisioning require trusted backend services.'
+                  )}
+                </p>
               </div>
             </div>
 
             <div className="text-end">
               <div className="text-xs text-[#D6D0C4]">
-                {t('الإجمالي النهائي المدفوع (شامل الضريبة)', 'Final Total Paid (VAT Inclusive)')}
+                {t('إجمالي الطلب', 'Order Total')}
               </div>
               <div className="text-2xl font-bold font-mono text-[#F5E6C8]">
                 {formatPrice(order.total)}
@@ -1320,10 +1336,15 @@ export function OrderConfirmationView() {
               <span className="text-[#C59B27] block font-semibold">
                 {t('رقم التتبع والناقل', 'Tracking & Carrier')}
               </span>
-              {displayTracking ? (
+              {hasRealOrDemoFulfillment && displayTracking ? (
                 <>
-                  <span className="font-mono font-bold">{displayTracking}</span> ·{' '}
-                  <span>{lang === 'ar' ? order.carrierAr : order.carrierEn}</span>
+                  <span className="font-mono font-bold">{displayTracking}</span>
+                  {displayCarrier ? (
+                    <>
+                      {' '}
+                      · <span>{displayCarrier}</span>
+                    </>
+                  ) : null}
                 </>
               ) : (
                 <span className="text-[#F5E6C8]">
@@ -1340,14 +1361,14 @@ export function OrderConfirmationView() {
               </span>
               <span className="uppercase font-mono">{order.paymentMethod}</span> ·{' '}
               <span className="font-mono">{order.paymentReference}</span>
-              {order.paymentMethod !== 'cod' && (
-                <span className="block text-[10px] text-[#F5E6C8]/80 mt-0.5">
-                  {t(
-                    'مرجع دفع محاكى للعرض — يتطلب بوابة دفع خلفية موثوقة في الإنتاج الفعلي',
-                    'Portfolio Mock Payment Reference — Requires trusted payment gateway in production'
-                  )}
-                </span>
-              )}
+              <span className="block text-[10px] text-[#F5E6C8]/90 mt-0.5">
+                {order.paymentMethod === 'cod'
+                  ? t('الدفع عند الاستلام', 'Payment on Delivery')
+                  : t(
+                      'الدفع بانتظار تكامل وتأكيد بوابة الدفع الموثوقة',
+                      'Payment awaiting trusted gateway integration and confirmation'
+                    )}
+              </span>
             </div>
             <div>
               <span className="text-[#C59B27] block font-semibold">
@@ -1386,7 +1407,7 @@ export function OrderConfirmationView() {
 
           <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-2.5 text-xs">
             <h2 className="text-sm font-bold text-[#141413] mb-2">
-              {t('تفاصيل الفاتورة الضريبية (١٥٪ متضمنة)', 'Tax Invoice Breakdown (15% Included)')}
+              {t('ملخص الطلب والضريبة المتضمنة (١٥٪)', 'Order & Included VAT Summary (15%)')}
             </h2>
             <div className="flex justify-between">
               <span className="text-[#57534E]">

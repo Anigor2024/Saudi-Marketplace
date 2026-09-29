@@ -93,6 +93,14 @@ export default function SellerCenter() {
       : demoSelectedSellerId || currentUser?.sellerId || 'seller-2';
   }, [isDemoMode, currentUser, demoSelectedSellerId]);
 
+  const hasAuthorizedSellerRecord = useMemo(() => {
+    if (isDemoMode) return true;
+    if (currentUser?.role === 'seller') {
+      return Boolean(currentUser.sellerId && sellers.some((s) => s.id === currentUser.sellerId));
+    }
+    return sellers.length > 0;
+  }, [isDemoMode, currentUser, sellers]);
+
   const activeSeller = useMemo(() => {
     return (
       sellers.find((s) => s.id === effectiveSellerId) ||
@@ -482,7 +490,11 @@ export default function SellerCenter() {
     );
   };
 
-  if (!canAccessSellerDashboard || (currentUser?.role !== 'admin' && activeSeller.status !== 'approved')) {
+  if (
+    !canAccessSellerDashboard ||
+    !hasAuthorizedSellerRecord ||
+    (currentUser?.role !== 'admin' && activeSeller.status !== 'approved')
+  ) {
     return (
       <div className="min-h-[75vh] bg-[#FAF8F5] flex items-center justify-center px-4 py-16">
         <div className="max-w-lg w-full bg-white rounded-2xl border border-[#E5E0D8] p-8 text-center shadow-sm">

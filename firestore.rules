@@ -673,6 +673,10 @@ service cloud.firestore {
     // 6. REVIEWS: Public reads approved reviews; Authenticated user creates own review;
     // verifiedPurchase == true is strictly validated against a real DELIVERED seller fulfillment / order owned by request.auth.uid
     // whose immutable item list contains `request.resource.data.productId`.
+    // UID PRIVACY LIMITATION NOTE: Firestore rules cannot field-filter publicly readable documents.
+    // While the UI never displays `userId`, `reviews` and `questions` retain `userId` for rule-level
+    // authorship verification; hiding `userId` from raw network payloads requires a public projection
+    // collection maintained by a trusted backend in production.
     match /reviews/{reviewId} {
       allow read: if resource.data.status == 'approved'
         || isAdmin()
@@ -695,7 +699,28 @@ service cloud.firestore {
         && (
           isAdmin()
           || (
-            request.resource.data.status == 'approved'
+            request.resource.data.keys().hasOnly([
+              'id',
+              'productId',
+              'productTitleAr',
+              'productTitleEn',
+              'userId',
+              'userName',
+              'rating',
+              'title',
+              'comment',
+              'verifiedPurchase',
+              'verifiedOrderId',
+              'helpfulCount',
+              'createdAt',
+              'status'
+            ])
+            && request.resource.data.id == reviewId
+            && isValidString(request.resource.data.userName, 1, 150)
+            && isValidString(request.resource.data.title, 1, 200)
+            && isValidString(request.resource.data.createdAt, 4, 40)
+            && request.resource.data.helpfulCount == 0
+            && request.resource.data.status == 'approved'
             && !('sellerReplyAr' in request.resource.data)
             && !('sellerReplyEn' in request.resource.data)
             && !('sellerReplyAt' in request.resource.data)

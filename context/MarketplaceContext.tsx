@@ -553,17 +553,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // - `privateSellers` holds full private `Seller` documents loaded ONLY for authenticated Admin, linked Seller, or Applicant
   const [categories] = useState<Category[]>(INITIAL_CATEGORIES);
   const [brands] = useState<Brand[]>(INITIAL_BRANDS);
-  const [products, setProducts] = useState<Product[]>(INITIAL_ALL_PRODUCTS);
+  const [products, setProducts] = useState<Product[]>([]);
   const [publicSellers, setPublicSellers] = useState<PublicSellerProfile[]>([]);
   const [privateSellers, setPrivateSellers] = useState<Seller[]>([]);
-  const [coupons, setCoupons] = useState<Coupon[]>(INITIAL_COUPONS);
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [sellerFulfillments, setSellerFulfillments] = useState<SellerFulfillment[]>([]);
-  const [reviews, setReviews] = useState<Review[]>(INITIAL_REVIEWS);
-  const [questions, setQuestions] = useState<ProductQuestion[]>(INITIAL_QUESTIONS);
-  const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
-  const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [questions, setQuestions] = useState<ProductQuestion[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [homepageConfig, setHomepageConfig] = useState<HomepageConfig>(INITIAL_HOMEPAGE_CONFIG);
   const [publicPlatformSettings, setPublicPlatformSettings] = useState<PublicPlatformSettings>(
@@ -574,11 +574,25 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   );
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
+  // Refs for authoritative live snapshot merging without preserving stale deleted/suspended docs
+  const publicProductsRef = React.useRef<Product[]>([]);
+  const sellerOwnProductsRef = React.useRef<Product[]>([]);
+  const publicCouponsRef = React.useRef<Coupon[]>([]);
+  const sellerOwnCouponsRef = React.useRef<Coupon[]>([]);
+  const currentRoleRef = React.useRef<{ role?: UserRole; sellerId?: string }>({});
+
   // Auth & Demo Mode State
   // Visitors start unauthenticated (null) and can browse publicly
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
   const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
+
+  useEffect(() => {
+    currentRoleRef.current = {
+      role: currentUser?.role,
+      sellerId: currentUser?.sellerId,
+    };
+  }, [currentUser?.role, currentUser?.sellerId]);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -593,50 +607,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [sortBy, setSortBy] = useState<
     'featured' | 'price_asc' | 'price_desc' | 'rating' | 'newest' | 'best_selling'
   >('featured');
-  const [recentSearches, setRecentSearches] = useState<string[]>([
-    'دهن عود كمبودي',
-    'آيفون ١٦ برو ماكس',
-    'ساعة سويسرية',
-    'ماكينة قهوة بريفيل',
-    'بشت ملكي حساوي',
-  ]);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
 
-  // Cart, Wishlist, Compare, Recently Viewed
-  const [cart, setCart] = useState<CartItem[]>([
-    {
-      id: 'prod-1-default',
-      productId: 'prod-1',
-      product: INITIAL_ALL_PRODUCTS[0],
-      quantity: 1,
-      selectedVariants: { 'لون الميناء': 'أخضر زمردي ملكي', 'مقاس القطر': '41 مم (كلاسيك)' },
-      unitPrice: 6450,
-    },
-    {
-      id: 'prod-5-default',
-      productId: 'prod-5',
-      product: INITIAL_ALL_PRODUCTS[4],
-      quantity: 1,
-      selectedVariants: { الحجم: 'توله كاملة ملكية (12 مل)' },
-      unitPrice: 1850,
-    },
-  ]);
-  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(INITIAL_COUPONS[0]);
-  const [wishlistIds, setWishlistIds] = useState<string[]>([
-    'prod-1',
-    'prod-5',
-    'prod-9',
-    'prod-21',
-    'prod-29',
-  ]);
-  const [compareIds, setCompareIds] = useState<string[]>(['prod-1', 'prod-4', 'prod-9']);
-  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>([
-    'prod-1',
-    'prod-5',
-    'prod-9',
-    'prod-21',
-    'prod-29',
-    'prod-33',
-  ]);
+  // Cart, Wishlist, Compare, Recently Viewed (empty on normal Production/anonymous startup; populated in Demo Mode via loginWithDemoRole)
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [wishlistIds, setWishlistIds] = useState<string[]>([]);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>([]);
 
   // Toasts
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -669,15 +647,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         loyaltyPoints: 0,
         loyaltyTier: 'Silver',
         referralCode: `ATH-${uid.slice(0, 5).toUpperCase()}`,
-        wishlist: ['prod-1', 'prod-5'],
-        addresses: [
-          {
-            ...INITIAL_USERS[0].addresses[0],
-            id: `addr-${uid.slice(0, 6)}`,
-            recipientName: name.trim() || 'عميل أثيل',
-            phone: phone.trim() || '+966 50 000 0000',
-          },
-        ],
+        wishlist: [],
+        addresses: [],
         loyaltyHistory: [],
         preferences: {
           newsletter: true,
@@ -702,6 +673,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           if (snap.exists()) {
             const data = snap.data() as UserProfile;
             setCurrentUser({ ...data, id: fbUser.uid });
+            setWishlistIds(Array.isArray(data.wishlist) ? data.wishlist : []);
           } else {
             const newProfile = buildDefaultCustomerProfile(
               fbUser.uid,
@@ -710,15 +682,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             );
             await setDoc(userRef, newProfile);
             setCurrentUser(newProfile);
+            setWishlistIds([]);
           }
         } catch (err) {
           logFirestoreFailure(err, OperationType.GET, `users/${fbUser.uid}`);
-          const fallbackProfile = buildDefaultCustomerProfile(
-            fbUser.uid,
-            fbUser.displayName || 'عميل أثيل',
-            fbUser.email || 'customer@atheel.sa'
-          );
-          setCurrentUser(fallbackProfile);
         }
       } else {
         setCurrentUser((prev) => {
@@ -788,28 +755,36 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     };
   }, [isDemoMode]);
 
-  // 2B. Public Storefront Catalog Listeners (Safe for all visitors)
+  // 2B. Public Storefront Catalog Listeners (Safe for all visitors; disabled in isolated Demo Mode)
   useEffect(() => {
+    if (isDemoMode) {
+      return;
+    }
+
     const unsubProducts = onSnapshot(
       query(collection(db, 'products'), where('status', 'in', ['active', 'out_of_stock'])),
       (snap) => {
-        if (!snap.empty) {
-          const list = snap.docs.map((d) => d.data() as Product);
-          list.sort((a, b) => {
+        const list = snap.docs.map((d) => d.data() as Product);
+        list.sort((a, b) => {
+          const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
+          const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
+          return numA - numB;
+        });
+        publicProductsRef.current = list;
+        const { role, sellerId } = currentRoleRef.current;
+        if (role === 'admin') {
+          // Admin listener (unsubAllProducts) is authoritative for Admin
+        } else if (role === 'seller' && sellerId) {
+          const otherSellers = list.filter((p) => p.sellerId !== sellerId);
+          const merged = [...sellerOwnProductsRef.current, ...otherSellers];
+          merged.sort((a, b) => {
             const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
             const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
             return numA - numB;
           });
-          const publicIds = new Set(list.map((p) => p.id));
-          setProducts((prev) => {
-            const preservedNonPublic = prev.filter(
-              (p) =>
-                !publicIds.has(p.id) &&
-                p.status !== 'active' &&
-                p.status !== 'out_of_stock'
-            );
-            return [...list, ...preservedNonPublic];
-          });
+          setProducts(merged);
+        } else {
+          setProducts(list);
         }
         setIsLoadingData(false);
       },
@@ -822,15 +797,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     const unsubCoupons = onSnapshot(
       query(collection(db, 'coupons'), where('isActive', '==', true)),
       (snap) => {
-        if (!snap.empty) {
-          const publicList = snap.docs.map((d) => d.data() as Coupon);
-          const publicIds = new Set(publicList.map((c) => c.id));
-          setCoupons((prev) => {
-            const preservedInactive = prev.filter(
-              (c) => !publicIds.has(c.id) && !c.isActive
-            );
-            return [...publicList, ...preservedInactive];
-          });
+        const publicList = snap.docs.map((d) => d.data() as Coupon);
+        publicCouponsRef.current = publicList;
+        const { role, sellerId } = currentRoleRef.current;
+        if (role === 'admin') {
+          // Admin listener (unsubAllCoupons) is authoritative for Admin
+        } else if (role === 'seller' && sellerId) {
+          const otherCoupons = publicList.filter((c) => c.sellerId !== sellerId);
+          setCoupons([...sellerOwnCouponsRef.current, ...otherCoupons]);
+        } else {
+          setCoupons(publicList);
         }
       },
       (err) => logFirestoreFailure(err, OperationType.LIST, 'coupons')
@@ -839,7 +815,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     const unsubReviews = onSnapshot(
       query(collection(db, 'reviews'), where('status', '==', 'approved')),
       (snap) => {
-        if (!snap.empty) {
+        if (currentRoleRef.current.role !== 'admin') {
           setReviews(snap.docs.map((d) => d.data() as Review));
         }
       },
@@ -849,9 +825,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     const unsubQuestions = onSnapshot(
       collection(db, 'questions'),
       (snap) => {
-        if (!snap.empty) {
-          setQuestions(snap.docs.map((d) => d.data() as ProductQuestion));
-        }
+        setQuestions(snap.docs.map((d) => d.data() as ProductQuestion));
       },
       (err) => logFirestoreFailure(err, OperationType.LIST, 'questions')
     );
@@ -892,7 +866,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubHomepage();
       unsubPublicSettings();
     };
-  }, []);
+  }, [isDemoMode]);
 
   // 3. Authenticated / Role-Scoped Listeners (Private Sellers, Orders, Tickets, Audit Logs & Admin Private Settings)
   useEffect(() => {
@@ -968,15 +942,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubAllProducts = onSnapshot(
         collection(db, 'products'),
         (snap) => {
-          if (!snap.empty) {
-            const list = snap.docs.map((d) => d.data() as Product);
-            list.sort((a, b) => {
-              const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
-              const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
-              return numA - numB;
-            });
-            setProducts(list);
-          }
+          const list = snap.docs.map((d) => d.data() as Product);
+          list.sort((a, b) => {
+            const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
+            const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
+            return numA - numB;
+          });
+          setProducts(list);
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'products')
       );
@@ -1000,9 +972,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubAllUsers = onSnapshot(
         collection(db, 'users'),
         (snap) => {
-          if (!snap.empty) {
-            setUsers(snap.docs.map((d) => d.data() as UserProfile));
-          }
+          setUsers(snap.docs.map((d) => d.data() as UserProfile));
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'users')
       );
@@ -1020,13 +990,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       unsubAllProducts = onSnapshot(
         query(collection(db, 'products'), where('sellerId', '==', sellerDocId)),
         (snap) => {
-          if (!snap.empty) {
-            const sellerItems = snap.docs.map((d) => d.data() as Product);
-            setProducts((prev) => {
-              const otherSellers = prev.filter((p) => p.sellerId !== sellerDocId);
-              return [...sellerItems, ...otherSellers];
-            });
-          }
+          const sellerItems = snap.docs.map((d) => d.data() as Product);
+          sellerOwnProductsRef.current = sellerItems;
+          const otherSellers = publicProductsRef.current.filter((p) => p.sellerId !== sellerDocId);
+          const merged = [...sellerItems, ...otherSellers];
+          merged.sort((a, b) => {
+            const numA = parseInt(a.id.replace(/\D/g, '') || '0', 10);
+            const numB = parseInt(b.id.replace(/\D/g, '') || '0', 10);
+            return numA - numB;
+          });
+          setProducts(merged);
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'products')
       );
@@ -1035,10 +1008,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         query(collection(db, 'coupons'), where('sellerId', '==', sellerDocId)),
         (snap) => {
           const sellerCouponList = snap.docs.map((d) => d.data() as Coupon);
-          setCoupons((prev) => {
-            const otherCoupons = prev.filter((c) => c.sellerId !== sellerDocId);
-            return [...sellerCouponList, ...otherCoupons];
-          });
+          sellerOwnCouponsRef.current = sellerCouponList;
+          const otherCoupons = publicCouponsRef.current.filter((c) => c.sellerId !== sellerDocId);
+          setCoupons([...sellerCouponList, ...otherCoupons]);
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'coupons')
       );
@@ -1289,13 +1261,51 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           : INITIAL_USERS[0];
 
       setIsDemoMode(true);
+      setIsLoadingData(false);
       setCurrentUser({ ...targetUser });
-      setPublicSellers((prev) => (prev.length > 0 ? prev : INITIAL_PUBLIC_SELLERS));
-      setPrivateSellers((prev) => (prev.length > 0 ? prev : INITIAL_SELLERS));
+      setProducts(INITIAL_ALL_PRODUCTS);
+      setPublicSellers(INITIAL_PUBLIC_SELLERS);
+      setPrivateSellers(INITIAL_SELLERS);
+      setCoupons(INITIAL_COUPONS);
+      setReviews(INITIAL_REVIEWS);
+      setQuestions(INITIAL_QUESTIONS);
+      setUsers(INITIAL_USERS);
+      setNotifications(INITIAL_NOTIFICATIONS);
       setOrders(INITIAL_ORDERS);
       setSellerFulfillments(INITIAL_SELLER_FULFILLMENTS);
       setTickets(INITIAL_TICKETS);
       setAuditLogs(INITIAL_AUDIT_LOGS);
+
+      // Explicitly populate Demo-only customer interaction state
+      setCart([
+        {
+          id: 'prod-1-default',
+          productId: 'prod-1',
+          product: INITIAL_ALL_PRODUCTS[0],
+          quantity: 1,
+          selectedVariants: { 'لون الميناء': 'أخضر زمردي ملكي', 'مقاس القطر': '41 مم (كلاسيك)' },
+          unitPrice: 6450,
+        },
+        {
+          id: 'prod-5-default',
+          productId: 'prod-5',
+          product: INITIAL_ALL_PRODUCTS[4],
+          quantity: 1,
+          selectedVariants: { الحجم: 'توله كاملة ملكية (12 مل)' },
+          unitPrice: 1850,
+        },
+      ]);
+      setAppliedCoupon(INITIAL_COUPONS[0]);
+      setWishlistIds(['prod-1', 'prod-5', 'prod-9', 'prod-21', 'prod-29']);
+      setCompareIds(['prod-1', 'prod-4', 'prod-9']);
+      setRecentlyViewedIds(['prod-1', 'prod-5', 'prod-9', 'prod-21', 'prod-29', 'prod-33']);
+      setRecentSearches([
+        'دهن عود كمبودي',
+        'آيفون ١٦ برو ماكس',
+        'ساعة سويسرية',
+        'ماكينة قهوة بريفيل',
+        'بشت ملكي حساوي',
+      ]);
 
       showToast(
         lang === 'ar'
@@ -1331,12 +1341,27 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const exitDemoMode = useCallback(() => {
     setIsDemoMode(false);
     setCurrentUser(null);
+    sellerOwnProductsRef.current = [];
+    sellerOwnCouponsRef.current = [];
+    setProducts([]);
+    setCoupons([]);
+    setReviews([]);
+    setQuestions([]);
+    setUsers([]);
+    setNotifications([]);
     setPublicSellers([]);
     setPrivateSellers([]);
     setOrders([]);
     setSellerFulfillments([]);
     setTickets([]);
     setAuditLogs([]);
+    setCart([]);
+    setAppliedCoupon(null);
+    setWishlistIds([]);
+    setCompareIds([]);
+    setRecentlyViewedIds([]);
+    setRecentSearches([]);
+    setLastCreatedOrder(null);
     showToast(
       lang === 'ar' ? 'تم إغلاق وضع العرض التجريبي' : 'Exited Demo Mode',
       lang === 'ar'
@@ -1473,12 +1498,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
         await setDoc(doc(db, 'users', fbUser.uid), newProfile);
         setCurrentUser(newProfile);
+        setWishlistIds([]);
 
         showToast(
           lang === 'ar' ? `مرحباً بك في أثيل، ${cleanName}` : `Welcome to Atheel, ${cleanName}`,
           lang === 'ar'
-            ? 'تم إنشاء حسابك بنجاح وإضافة ١,٠٠٠ نقطة ولاء ترحيبية'
-            : 'Your customer account has been created with 1,000 welcome loyalty points',
+            ? 'تم إنشاء حسابك بنجاح. يمكنك الآن التسوق وإضافة عنوانك الوطني.'
+            : 'Your customer account has been created successfully.',
           'success'
         );
 
@@ -1603,9 +1629,24 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     }
     setIsDemoMode(false);
     setCurrentUser(null);
+    sellerOwnProductsRef.current = [];
+    sellerOwnCouponsRef.current = [];
+    setProducts(publicProductsRef.current);
+    setCoupons(publicCouponsRef.current);
     setOrders([]);
     setSellerFulfillments([]);
+    setTickets([]);
     setAuditLogs([]);
+    setPrivateSellers([]);
+    setUsers([]);
+    setNotifications([]);
+    setCart([]);
+    setAppliedCoupon(null);
+    setWishlistIds([]);
+    setCompareIds([]);
+    setRecentlyViewedIds([]);
+    setRecentSearches([]);
+    setLastCreatedOrder(null);
     showToast(
       lang === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Signed Out Successfully',
       lang === 'ar' ? 'نتطلع لرؤيتك مجدداً في أثيل' : 'We look forward to welcoming you back',
@@ -2084,12 +2125,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           id: `notif-${Date.now()}`,
           userId: currentUser.id,
           type: 'order',
-          titleAr: `تم تأكيد طلبك #${orderNum} بنجاح`,
-          titleEn: `Order #${orderNum} Confirmed`,
+          titleAr: `تم تسجيل طلبك #${orderNum} بنجاح`,
+          titleEn: `Order #${orderNum} Recorded Successfully`,
           messageAr: `إجمالي الطلب ${formatPrice(finalTotal)} (شامل ضريبة القيمة المضافة ١٥٪).${
             newOrder.trackingNumber ? ` رقم التتبع: ${newOrder.trackingNumber}` : ''
           }`,
-          messageEn: `Total ${formatPrice(finalTotal)} (incl. 15% VAT).${
+          messageEn: `Order Total ${formatPrice(finalTotal)} (incl. 15% VAT).${
             newOrder.trackingNumber ? ` Tracking: ${newOrder.trackingNumber}` : ''
           }`,
           read: false,
@@ -2102,11 +2143,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       clearCart();
       showToast(
         lang === 'ar'
-          ? `تم تأكيد طلبك #${orderNum} بنجاح!`
-          : `Order #${orderNum} Placed Successfully!`,
+          ? 'تم تسجيل الطلب بنجاح'
+          : 'Order Recorded Successfully',
         lang === 'ar'
-          ? 'تم إصدار الفاتورة الضريبية وإرسال تفاصيل الشحنة'
-          : 'Tax invoice generated and shipment scheduled',
+          ? 'تم احتساب الضريبة ضمن ملخص الطلب. تهيئة الشحن والدفع الفعلي تتطلب الخدمات الخلفية الموثوقة.'
+          : 'VAT is included in the order summary. Authoritative payment and shipment provisioning require trusted backend services.',
         'success'
       );
       setActiveView('order-confirmation');
@@ -2424,7 +2465,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         comment: comment.trim(),
         verifiedPurchase: isVerifiedBuyer,
         ...(isVerifiedBuyer && deliveredOrder ? { verifiedOrderId: deliveredOrder.id } : {}),
-        helpfulCount: 1,
+        helpfulCount: 0,
         createdAt: new Date().toISOString().split('T')[0],
         status: 'approved',
       };

@@ -205,8 +205,8 @@ export function AuthViews() {
               </h1>
               <p className="text-xs text-[#D6D0C4] leading-relaxed">
                 {t(
-                  'تمتع بتجربة تسوق موثقة ١٠٠٪ من أرقى المتاجر السعودية، فواتير ضريبية معتمدة، وتوصيل VIP سريع لجميع مدن المملكة.',
-                  'Experience 100% verified Saudi boutiques, official ZATCA tax invoices, and insured VIP express delivery across KSA.'
+                  'تمتع بتجربة تسوق موثقة ١٠٠٪ من أرقى المتاجر السعودية، أسعار شاملة لضريبة القيمة المضافة ١٥٪، وتوصيل VIP سريع لجميع مدن المملكة.',
+                  'Experience 100% verified Saudi boutiques, transparent 15% VAT-inclusive pricing, and insured VIP express delivery across KSA.'
                 )}
               </p>
             </div>
@@ -225,8 +225,8 @@ export function AuthViews() {
                 <Sparkles className="w-4 h-4 text-[#C59B27] shrink-0 mt-0.5" />
                 <span>
                   {t(
-                    '١,٠٠٠ نقطة ولاء ترحيبية للعملاء الجدد عند التسجيل',
-                    '1,000 welcome loyalty points credited upon customer registration'
+                    'تتبع مستقل لشحنات كل متجر وإدارة متكاملة للعناوين الوطنية',
+                    'Vendor-isolated shipment tracking and Saudi National Address management'
                   )}
                 </span>
               </div>

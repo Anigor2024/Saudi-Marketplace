@@ -401,10 +401,15 @@ export function deriveAggregateOrderStatus(
   }
 
   const orderFulfillments = fulfillments.filter((f) => f.orderId === order.id);
+  const itemSellerIds = Array.from(
+    new Set(
+      order.items
+        .map((i) => i.sellerId)
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    )
+  );
   const expectedSellerIds =
-    order.sellerIds && order.sellerIds.length > 0
-      ? order.sellerIds
-      : Array.from(new Set(order.items.map((i) => i.sellerId)));
+    itemSellerIds.length > 0 ? itemSellerIds : order.sellerIds || [];
 
   if (orderFulfillments.length === 0) {
     // When no fulfillment records exist yet, do not falsely claim 'delivered' or in-transit states
@@ -440,6 +445,16 @@ export function deriveAggregateOrderStatus(
   return order.status === 'placed' ? 'placed' : 'confirmed';
 }
 
+/**
+ * UID Privacy Architecture Note:
+ * `Review` and `ProductQuestion` store `userId` so Firestore security rules can verify
+ * authenticated ownership (`request.resource.data.userId == request.auth.uid`) and enforce
+ * immutable author identity on updates. The storefront UI never renders `userId`.
+ * However, because Firestore security rules operate at the document level and cannot filter
+ * individual fields out of publicly readable documents, `userId` remains readable in the
+ * raw Firestore document payload. Full field-level redaction in production requires a trusted
+ * backend or Cloud Function maintaining a separate public projection collection.
+ */
 export interface Review {
   id: string;
   productId: string;
