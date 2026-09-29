@@ -3225,12 +3225,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         phone: sellerData.phone || currentUser.phone || '+966 50 000 0000',
         status: 'pending',
         verifiedBadge: false,
-        rating: 5.0,
-        reviewCount: 1,
-        commissionRate:
-          typeof privatePlatformSettings.defaultSellerCommissionRate === 'number'
-            ? privatePlatformSettings.defaultSellerCommissionRate
-            : 12,
+        rating: 0,
+        reviewCount: 0,
+        commissionRate: 0,
         grossSales: 0,
         platformCommission: 0,
         refundsTotal: 0,
@@ -3274,7 +3271,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       lang,
       showToast,
       publicPlatformSettings.sellerApplicationsEnabled,
-      privatePlatformSettings.defaultSellerCommissionRate,
     ]
   );
 
@@ -3437,8 +3433,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       const cleanAmount = Number(Number(amount || 0).toFixed(2));
       const minPayout =
-        typeof privatePlatformSettings.minimumPayoutAmount === 'number'
-          ? privatePlatformSettings.minimumPayoutAmount
+        typeof publicPlatformSettings.minimumPayoutAmount === 'number' &&
+        publicPlatformSettings.minimumPayoutAmount >= 0
+          ? publicPlatformSettings.minimumPayoutAmount
           : 500;
       if (requestableBalance < minPayout || cleanAmount < minPayout) {
         showToast(
@@ -3529,7 +3526,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       formatPrice,
       lang,
       showToast,
-      privatePlatformSettings.minimumPayoutAmount,
+      publicPlatformSettings.minimumPayoutAmount,
     ]
   );
 
@@ -3586,10 +3583,24 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
       }
 
+      // Assign default commission ONLY during Admin approval of a pending Seller application
+      // (existing approved sellers retain their contracted commissionRate).
+      const liveDefaultCommission =
+        typeof privatePlatformSettings.defaultSellerCommissionRate === 'number' &&
+        privatePlatformSettings.defaultSellerCommissionRate >= 0
+          ? privatePlatformSettings.defaultSellerCommissionRate
+          : 12;
+
+      const assignedCommissionRate =
+        isApproved && (target.status === 'pending' || target.commissionRate === 0)
+          ? liveDefaultCommission
+          : target.commissionRate;
+
       const updated: Seller = {
         ...target,
         status,
         verifiedBadge: isApproved,
+        commissionRate: assignedCommissionRate,
       };
       const publicProjection: PublicSellerProfile = toPublicSellerProfile(updated);
 
@@ -3661,14 +3672,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       await addAuditLog(
         `تحديث حالة التاجر «${target.nameAr}» إلى (${
           status === 'approved'
-            ? 'معتمد وموثق وتفعيل حساب التاجر ومزامنة الملف العام'
+            ? `معتمد وموثق بعمولة ${assignedCommissionRate}% وتفعيل حساب التاجر ومزامنة الملف العام`
             : status === 'suspended'
             ? 'موقوف مؤقتاً وإخفاؤه من المتجر العام'
             : status === 'rejected'
             ? 'مرفوض وإخفاؤه من المتجر العام'
             : 'قيد المراجعة'
         })`,
-        `Updated seller "${target.nameEn}" status to ${status} and synced public profile${
+        `Updated seller "${target.nameEn}" status to ${status}${
+          isApproved ? ` (commission ${assignedCommissionRate}%)` : ''
+        } and synced public profile${
           isApproved && applicantUid ? ` (linked user ${applicantUid})` : ''
         }`,
         'seller',
@@ -3678,13 +3691,23 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         lang === 'ar' ? `تم تحديث حالة متجر ${target.nameAr}` : `Updated ${target.nameEn} status`,
         isApproved && applicantUid
           ? lang === 'ar'
-            ? 'تمت ترقية حساب مقدم الطلب إلى تاجر معتمد ومزامنة الملف العام للمتجر'
-            : 'Applicant account activated and public storefront profile synchronized'
+            ? `تمت ترقية حساب مقدم الطلب إلى تاجر معتمد بعمولة ${assignedCommissionRate}% ومزامنة الملف العام للمتجر`
+            : `Applicant account activated (${assignedCommissionRate}% commission) and public storefront profile synchronized`
           : undefined,
         'success'
       );
     },
-    [currentUser, isDemoMode, privateSellers, sellers, users, addAuditLog, lang, showToast]
+    [
+      currentUser,
+      isDemoMode,
+      privateSellers,
+      sellers,
+      users,
+      privatePlatformSettings.defaultSellerCommissionRate,
+      addAuditLog,
+      lang,
+      showToast,
+    ]
   );
 
   const requestSellerApplicationInfo = useCallback(
@@ -4655,6 +4678,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const freeThreshold = Number(settings.freeShippingThreshold);
       const stdFee = Number(settings.standardShippingFee);
       const expFee = Number(settings.expressShippingFee);
+      const minPayout = Number(settings.minimumPayoutAmount);
 
       if (
         !Number.isFinite(freeThreshold) ||
@@ -4665,12 +4689,15 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         stdFee > 5000 ||
         !Number.isFinite(expFee) ||
         expFee < 0 ||
-        expFee > 5000
+        expFee > 5000 ||
+        !Number.isFinite(minPayout) ||
+        minPayout < 0 ||
+        minPayout > 1000000
       ) {
         showToast(
           lang === 'ar'
-            ? 'يرجى التأكد من صحة قيم رسوم الشحن وحد الشحن المجاني (أرقام غير سالبة)'
-            : 'Shipping fees and free shipping threshold must be valid non-negative numbers',
+            ? 'يرجى التأكد من صحة قيم رسوم الشحن والحد الأدنى لتسوية الأرباح (أرقام غير سالبة)'
+            : 'Shipping fees, free shipping threshold, and minimum payout amount must be valid non-negative numbers',
           undefined,
           'error'
         );
@@ -4697,6 +4724,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         freeShippingThreshold: Number(freeThreshold.toFixed(2)),
         standardShippingFee: Number(stdFee.toFixed(2)),
         expressShippingFee: Number(expFee.toFixed(2)),
+        minimumPayoutAmount: Number(minPayout.toFixed(2)),
         maintenanceBannerActive: Boolean(settings.maintenanceBannerActive),
         maintenanceBannerAr: (settings.maintenanceBannerAr || '').trim().slice(0, 400),
         maintenanceBannerEn: (settings.maintenanceBannerEn || '').trim().slice(0, 400),
@@ -4737,9 +4765,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       await addAuditLog(
         changeSummaryAr ||
-          `تحديث الإعدادات العامة وسياسات الشحن للمنصة (الشحن المجاني: ${sanitized.freeShippingThreshold} ر.س، العادي: ${sanitized.standardShippingFee} ر.س، السريع: ${sanitized.expressShippingFee} ر.س)`,
+          `تحديث الإعدادات العامة وسياسات الشحن والتسوية (الشحن المجاني: ${sanitized.freeShippingThreshold} ر.س، الحد الأدنى للتسوية: ${sanitized.minimumPayoutAmount} ر.س)`,
         changeSummaryEn ||
-          `Updated public platform settings (Free Shipping >= ${sanitized.freeShippingThreshold} SAR, Standard: ${sanitized.standardShippingFee} SAR, Express: ${sanitized.expressShippingFee} SAR)`,
+          `Updated public platform settings (Free Shipping >= ${sanitized.freeShippingThreshold} SAR, Min Payout: ${sanitized.minimumPayoutAmount} SAR)`,
         'settings',
         'publicPlatformSettings'
       );
@@ -4769,7 +4797,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       if (!currentUser || currentUser.role !== 'admin') return false;
 
       const defaultComm = Number(settings.defaultSellerCommissionRate);
-      const minPayout = Number(settings.minimumPayoutAmount);
       const payoutSla = Math.round(Number(settings.payoutSlaBusinessDays));
       const returnWindow = Math.round(Number(settings.returnWindowDays));
       const lowStockDef = Math.round(Number(settings.lowStockGlobalDefaultThreshold));
@@ -4778,9 +4805,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         !Number.isFinite(defaultComm) ||
         defaultComm < 0 ||
         defaultComm > 50 ||
-        !Number.isFinite(minPayout) ||
-        minPayout < 0 ||
-        minPayout > 1000000 ||
         !Number.isFinite(payoutSla) ||
         payoutSla < 1 ||
         payoutSla > 30 ||
@@ -4804,7 +4828,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const nowIso = new Date().toISOString();
       const sanitized: PrivatePlatformSettings = {
         defaultSellerCommissionRate: Number(defaultComm.toFixed(2)),
-        minimumPayoutAmount: Number(minPayout.toFixed(2)),
         payoutSlaBusinessDays: payoutSla,
         requireVerifiedBadgeForFeatured: Boolean(settings.requireVerifiedBadgeForFeatured),
         autoApproveVerifiedSellerProducts: Boolean(settings.autoApproveVerifiedSellerProducts),
@@ -4837,9 +4860,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       await addAuditLog(
         changeSummaryAr ||
-          `تحديث إعدادات الحوكمة الداخلية والسياسات المالية (العمولة الافتراضية: ${sanitized.defaultSellerCommissionRate}%، الحد الأدنى للتسوية: ${sanitized.minimumPayoutAmount} ر.س، نافذة الإرجاع: ${sanitized.returnWindowDays} يوماً)`,
+          `تحديث إعدادات الحوكمة الداخلية والسياسات المالية (العمولة الافتراضية للتجار الجدد: ${sanitized.defaultSellerCommissionRate}%، نافذة الإرجاع: ${sanitized.returnWindowDays} يوماً)`,
         changeSummaryEn ||
-          `Updated private governance settings (Default Commission: ${sanitized.defaultSellerCommissionRate}%, Min Payout: ${sanitized.minimumPayoutAmount} SAR, Return Window: ${sanitized.returnWindowDays}d)`,
+          `Updated private governance settings (Default New Seller Commission: ${sanitized.defaultSellerCommissionRate}%, Return Window: ${sanitized.returnWindowDays}d)`,
         'settings',
         'privatePlatformSettings'
       );

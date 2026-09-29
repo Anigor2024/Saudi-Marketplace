@@ -584,6 +584,7 @@ export interface PublicPlatformSettings {
   freeShippingThreshold: number;
   standardShippingFee: number;
   expressShippingFee: number;
+  minimumPayoutAmount: number;
   maintenanceBannerActive: boolean;
   maintenanceBannerAr: string;
   maintenanceBannerEn: string;
@@ -596,7 +597,6 @@ export interface PublicPlatformSettings {
 
 export interface PrivatePlatformSettings {
   defaultSellerCommissionRate: number;
-  minimumPayoutAmount: number;
   payoutSlaBusinessDays: number;
   requireVerifiedBadgeForFeatured: boolean;
   autoApproveVerifiedSellerProducts: boolean;

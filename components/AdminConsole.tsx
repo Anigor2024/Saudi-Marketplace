@@ -188,7 +188,10 @@ export function AdminConsole() {
         titleEn: `Merchant Application: ${s.nameEn}`,
         subtitleAr: `${s.cityAr} · السجل التجاري: ${s.crNumber || 'قيد التدقيق'}`,
         subtitleEn: `${s.cityEn} · CR: ${s.crNumber || 'Pending check'}`,
-        meta: `${s.commissionRate ?? 12}% Commission`,
+        meta:
+          s.status === 'pending' && s.commissionRate === 0
+            ? 'Assigned on Approval'
+            : `${s.commissionRate}% Commission`,
         timestamp: s.joinedAt || '2025-02-20',
         targetSection: 'sellers',
         entityId: s.id,

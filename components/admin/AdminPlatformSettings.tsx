@@ -102,6 +102,8 @@ export default function AdminPlatformSettings() {
         Number(publicPlatformSettings.standardShippingFee) ||
       Number(publicDraft.expressShippingFee) !==
         Number(publicPlatformSettings.expressShippingFee) ||
+      Number(publicDraft.minimumPayoutAmount) !==
+        Number(publicPlatformSettings.minimumPayoutAmount) ||
       Boolean(publicDraft.maintenanceBannerActive) !==
         Boolean(publicPlatformSettings.maintenanceBannerActive) ||
       publicDraft.maintenanceBannerAr !==
@@ -124,8 +126,6 @@ export default function AdminPlatformSettings() {
     return (
       Number(privateDraft.defaultSellerCommissionRate) !==
         Number(privatePlatformSettings.defaultSellerCommissionRate) ||
-      Number(privateDraft.minimumPayoutAmount) !==
-        Number(privatePlatformSettings.minimumPayoutAmount) ||
       Number(privateDraft.payoutSlaBusinessDays) !==
         Number(privatePlatformSettings.payoutSlaBusinessDays) ||
       Boolean(privateDraft.requireVerifiedBadgeForFeatured) !==
@@ -217,6 +217,15 @@ export default function AdminPlatformSettings() {
         )
       );
     }
+    const minPayout = Number(publicDraft.minimumPayoutAmount);
+    if (!Number.isFinite(minPayout) || minPayout < 0 || minPayout > 1000000) {
+      errs.push(
+        t(
+          'الحد الأدنى لطلب تسوية الأرباح يجب أن يكون رقماً غير سالب (0 إلى 1,000,000 ر.س).',
+          'Minimum payout amount must be a non-negative number (0 to 1,000,000 SAR).'
+        )
+      );
+    }
     if (
       publicDraft.maintenanceBannerActive &&
       (!publicDraft.maintenanceBannerAr.trim() ||
@@ -241,15 +250,6 @@ export default function AdminPlatformSettings() {
         t(
           'نسبة العمولة الافتراضية للتجار الجدد يجب أن تكون بين 0% و 50%.',
           'Default seller commission rate must be between 0% and 50%.'
-        )
-      );
-    }
-    const minPayout = Number(privateDraft.minimumPayoutAmount);
-    if (!Number.isFinite(minPayout) || minPayout < 0 || minPayout > 1000000) {
-      errs.push(
-        t(
-          'الحد الأدنى لطلب تسوية الأرباح يجب أن يكون رقماً غير سالب (0 إلى 1,000,000 ر.س).',
-          'Minimum payout amount must be a non-negative number (0 to 1,000,000 SAR).'
         )
       );
     }
@@ -293,10 +293,10 @@ export default function AdminPlatformSettings() {
       return;
     }
 
-    const summaryAr = `تحديث الإعدادات العامة للمنصة (الشحن المجاني: ${publicDraft.freeShippingThreshold} ر.س، العادي: ${publicDraft.standardShippingFee} ر.س، السريع: ${publicDraft.expressShippingFee} ر.س، الدفع: ${
+    const summaryAr = `تحديث الإعدادات العامة للمنصة (الشحن المجاني: ${publicDraft.freeShippingThreshold} ر.س، الحد الأدنى للتسوية: ${publicDraft.minimumPayoutAmount} ر.س، الدفع: ${
       publicDraft.checkoutEnabled ? 'مفعّل' : 'موقوف'
     })`;
-    const summaryEn = `Updated public platform settings (Free Shipping >= ${publicDraft.freeShippingThreshold} SAR, Standard: ${publicDraft.standardShippingFee} SAR, Express: ${publicDraft.expressShippingFee} SAR, Checkout: ${
+    const summaryEn = `Updated public platform settings (Free Shipping >= ${publicDraft.freeShippingThreshold} SAR, Min Payout: ${publicDraft.minimumPayoutAmount} SAR, Checkout: ${
       publicDraft.checkoutEnabled ? 'ON' : 'OFF'
     })`;
 
@@ -323,8 +323,8 @@ export default function AdminPlatformSettings() {
     }
 
     // Do NOT expose internalGovernanceNotes inside Audit list summaries
-    const summaryAr = `تحديث إعدادات الحوكمة الداخلية (العمولة الافتراضية: ${privateDraft.defaultSellerCommissionRate}%، الحد الأدنى للتسوية: ${privateDraft.minimumPayoutAmount} ر.س، نافذة الإرجاع: ${privateDraft.returnWindowDays} يوماً)`;
-    const summaryEn = `Updated internal governance settings (Default Commission: ${privateDraft.defaultSellerCommissionRate}%, Min Payout: ${privateDraft.minimumPayoutAmount} SAR, Return Window: ${privateDraft.returnWindowDays}d)`;
+    const summaryAr = `تحديث إعدادات الحوكمة الداخلية (العمولة الافتراضية للتجار الجدد: ${privateDraft.defaultSellerCommissionRate}%، نافذة الإرجاع: ${privateDraft.returnWindowDays} يوماً)`;
+    const summaryEn = `Updated internal governance settings (Default New Seller Commission: ${privateDraft.defaultSellerCommissionRate}%, Return Window: ${privateDraft.returnWindowDays}d)`;
 
     setIsSavingPrivate(true);
     const ok = await updatePrivatePlatformSettings(
@@ -846,6 +846,77 @@ export default function AdminPlatformSettings() {
                 </div>
               </div>
 
+              {/* 3B. Seller & Treasury Operational Policy */}
+              <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-5 shadow-2xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#F3EFEA] pb-3.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-[#EBF3F0] text-[#0B4F3F] flex items-center justify-center">
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-[#141413]">
+                        {t(
+                          'السياسة التشغيلية للتجار وتسويات الخزينة (Seller & Treasury Operational Policy)',
+                          'Seller & Treasury Operational Policy'
+                        )}
+                      </h3>
+                      <p className="text-[11px] text-[#8C857B]">
+                        {t(
+                          'الحد الأدنى المعتمد لطلب تسوية الأرباح متاح للقراءة المباشرة في بوابة التاجر ومفروض برمجياً وفي قواعد أمان Firestore',
+                          'Canonical minimum payout threshold readable by Seller sessions and enforced in UI, context, and Firestore Security Rules'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] text-[10px] font-mono font-bold">
+                    SELLER-FACING POLICY
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+                  <div>
+                    <label className="block text-xs font-bold text-[#141413] mb-1">
+                      {t(
+                        'الحد الأدنى لطلب تسوية الأرباح (ر.س) *',
+                        'Minimum Payout Request Threshold (SAR) *'
+                      )}
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000000}
+                      step="50"
+                      value={publicDraft.minimumPayoutAmount}
+                      onChange={(e) =>
+                        updatePublicField(
+                          'minimumPayoutAmount',
+                          Math.max(0, Number(e.target.value) || 0)
+                        )
+                      }
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-sm font-mono font-bold text-[#0B4F3F]"
+                    />
+                    <span className="text-[10px] text-[#8C857B] mt-1 block">
+                      {t(
+                        'يُفرض فورياً في بوابة التاجر وفي دالة requestSellerPayout وفي قواعد Firestore لتذاكر التسوية (payout)',
+                        'Immediately enforced in Seller Payout UI, requestSellerPayout, and Firestore payout ticket rules'
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-xs text-[#57534E] space-y-1">
+                    <div className="font-bold text-[#141413]">
+                      {t('حوكمة تسويات الخزينة الحية', 'Live Payout Threshold Enforcement')}
+                    </div>
+                    <p className="text-[11px] leading-relaxed">
+                      {t(
+                        'كتابة هذا الحد محصورة بالمسؤول فقط، بينما يُقرأ مباشرة من الإعدادات العامة لضمان تطبيق التعديلات فوراً في جلسات التجار الحقيقية.',
+                        'Admin-only write; publicly readable so production Seller sessions immediately enforce the latest minimum payout threshold.'
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* 4. Tax Architecture (ZATCA 15% VAT Locked) */}
               <div className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-4 shadow-2xs">
                 <div className="flex items-center justify-between border-b border-[#F3EFEA] pb-3.5">
@@ -1240,7 +1311,7 @@ export default function AdminPlatformSettings() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-[#141413] mb-1">
                       <span className="inline-flex items-center gap-1">
@@ -1268,35 +1339,9 @@ export default function AdminPlatformSettings() {
                       className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-sm font-mono font-bold text-[#0B4F3F]"
                     />
                     <span className="text-[10px] text-[#8C857B] mt-1 block">
-                      {t('النطاق المسموح: 0% إلى 50%', 'Valid range: 0% to 50%')}
-                    </span>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-[#141413] mb-1">
                       {t(
-                        'الحد الأدنى لطلب تسوية الأرباح (ر.س)',
-                        'Minimum Payout Request (SAR)'
-                      )}
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={1000000}
-                      step="50"
-                      value={privateDraft.minimumPayoutAmount}
-                      onChange={(e) =>
-                        updatePrivateField(
-                          'minimumPayoutAmount',
-                          Math.max(0, Number(e.target.value) || 0)
-                        )
-                      }
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-sm font-mono font-bold text-[#141413]"
-                    />
-                    <span className="text-[10px] text-[#8C857B] mt-1 block">
-                      {t(
-                        'مُفعّل في بوابة التاجر ودالة requestSellerPayout',
-                        'Enforced in Seller Payout UI and requestSellerPayout'
+                        'النطاق: 0% إلى 50% (تُعيّن حصرياً عند اعتماد المسؤول لطلب المتجر الجديد)',
+                        'Valid range: 0% to 50% (assigned only upon Admin approval of a pending application)'
                       )}
                     </span>
                   </div>
@@ -1590,10 +1635,10 @@ export default function AdminPlatformSettings() {
                   </div>
                   <div className="flex items-center justify-between py-2 border-b border-[#F3EFEA]">
                     <span className="text-[#57534E]">
-                      {t('الحد الأدنى لطلب التسوية:', 'Minimum Payout Threshold:')}
+                      {t('الحد الأدنى لطلب التسوية (عام):', 'Minimum Payout Threshold (Public):')}
                     </span>
                     <span className="font-mono font-bold text-[#141413]">
-                      {formatPrice(privateDraft.minimumPayoutAmount)}
+                      {formatPrice(publicPlatformSettings.minimumPayoutAmount)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between py-2 border-b border-[#F3EFEA]">

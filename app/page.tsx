@@ -1275,6 +1275,13 @@ function MarketplaceShell() {
                           </div>
                         )}
 
+                        <div className="p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] text-[11px] text-[#57534E]">
+                          {t(
+                            'تُحدد عمولة المتجر عند الاعتماد وفق سياسة المنصة الحالية.',
+                            'Seller commission is assigned upon approval according to the current marketplace policy.'
+                          )}
+                        </div>
+
                         {showSellerAppForm && publicPlatformSettings.sellerApplicationsEnabled && (
                           <form
                             onSubmit={handleSellerApplicationSubmit}

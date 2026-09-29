@@ -46,14 +46,14 @@ export default function SellerFinanceAndProfile({
     tickets,
     updateSellerProfile,
     requestSellerPayout,
-    privatePlatformSettings,
+    publicPlatformSettings,
     showToast,
   } = useMarketplace();
 
   const minimumPayoutAmount =
-    typeof privatePlatformSettings?.minimumPayoutAmount === 'number' &&
-    privatePlatformSettings.minimumPayoutAmount >= 0
-      ? privatePlatformSettings.minimumPayoutAmount
+    typeof publicPlatformSettings?.minimumPayoutAmount === 'number' &&
+    publicPlatformSettings.minimumPayoutAmount >= 0
+      ? publicPlatformSettings.minimumPayoutAmount
       : 500;
 
   // ============================================================================

@@ -670,7 +670,12 @@ export default function AdminSellersAndProducts({
                             {formatPrice(seller.platformCommission)}
                           </div>
                           <div className="text-[11px] text-[#8C857B]">
-                            {t('نسبة العمولة:', 'Rate:')} {seller.commissionRate}%
+                            {seller.status === 'pending' && seller.commissionRate === 0
+                              ? t(
+                                  'تُحدد عمولة المتجر عند الاعتماد وفق سياسة المنصة الحالية.',
+                                  'Seller commission is assigned upon approval according to the current marketplace policy.'
+                                )
+                              : `${t('نسبة العمولة:', 'Rate:')} ${seller.commissionRate}%`}
                           </div>
                         </td>
 
@@ -830,7 +835,10 @@ export default function AdminSellersAndProducts({
                   </div>
                   <div className="flex justify-between">
                     <span className="text-[#57534E]">
-                      {t('عمولة المنصة المحصلة:', 'Platform Commission:')} ({inspectingSeller.commissionRate}%)
+                      {t('عمولة المنصة المحصلة:', 'Platform Commission:')}{' '}
+                      {inspectingSeller.status === 'pending' && inspectingSeller.commissionRate === 0
+                        ? `(${t('تُحدد عند الاعتماد', 'Assigned on Approval')})`
+                        : `(${inspectingSeller.commissionRate}%)`}
                     </span>
                     <span className="font-mono font-bold text-[#0B4F3F]">
                       {formatPrice(inspectingSeller.platformCommission)}

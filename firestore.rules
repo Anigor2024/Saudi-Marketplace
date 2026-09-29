@@ -292,11 +292,15 @@ service cloud.firestore {
             request.resource.data.applicantUserId == request.auth.uid
             && request.resource.data.status == 'pending'
             && request.resource.data.verifiedBadge == false
+            && request.resource.data.rating == 0
+            && request.resource.data.reviewCount == 0
+            && request.resource.data.commissionRate == 0
             && request.resource.data.grossSales == 0
             && request.resource.data.platformCommission == 0
             && request.resource.data.refundsTotal == 0
             && request.resource.data.netEarnings == 0
             && request.resource.data.availableBalance == 0
+            && request.resource.data.payoutHistory is list
             && request.resource.data.payoutHistory.size() == 0
           )
         );
@@ -622,6 +626,8 @@ service cloud.firestore {
     // 8. SUPPORT TICKETS: Authenticated customer/seller creates & reads own tickets;
     // Admin may create tickets for another user (e.g. seller_application_info) and manages all;
     // Seller payout / return_inspection tickets require an active approved seller account via ownsSellerAccount().
+    // For workflowType == 'payout', rules enforce payoutAmount > 0 and payoutAmount >= settings/publicPlatformSettings.minimumPayoutAmount.
+    // Aggregate pending payout reservation across multiple tickets still requires a trusted backend for complete production-grade atomic integrity.
     match /tickets/{ticketId} {
       allow create: if isSignedIn()
         && isValidId(ticketId)
@@ -637,7 +643,26 @@ service cloud.firestore {
                 !(request.resource.data.get('workflowType', 'support') in ['payout', 'return_inspection'])
                 && request.resource.data.get('sellerId', '') == ''
               )
-              || ownsSellerAccount(request.resource.data.get('sellerId', ''))
+              || (
+                request.resource.data.get('workflowType', 'support') == 'return_inspection'
+                && ownsSellerAccount(request.resource.data.get('sellerId', ''))
+              )
+              || (
+                request.resource.data.get('workflowType', 'support') == 'payout'
+                && ownsSellerAccount(request.resource.data.get('sellerId', ''))
+                && request.resource.data.payoutAmount is number
+                && request.resource.data.payoutAmount > 0
+                && (
+                  !exists(/databases/$(database)/documents/settings/publicPlatformSettings)
+                    ? request.resource.data.payoutAmount >= 500
+                    : request.resource.data.payoutAmount >=
+                        get(/databases/$(database)/documents/settings/publicPlatformSettings)
+                          .data.minimumPayoutAmount
+                )
+                && isValidString(request.resource.data.ibanLast4, 4, 4)
+                && request.resource.data.treasuryStatus == 'requested'
+                && request.resource.data.status == 'open'
+              )
             )
           )
         );
@@ -732,6 +757,7 @@ service cloud.firestore {
           'freeShippingThreshold',
           'standardShippingFee',
           'expressShippingFee',
+          'minimumPayoutAmount',
           'maintenanceBannerActive',
           'maintenanceBannerAr',
           'maintenanceBannerEn',
@@ -758,6 +784,8 @@ service cloud.firestore {
         && data.standardShippingFee <= 5000
         && isNonNegativeNumber(data.expressShippingFee)
         && data.expressShippingFee <= 5000
+        && isNonNegativeNumber(data.minimumPayoutAmount)
+        && data.minimumPayoutAmount <= 1000000
         && data.maintenanceBannerActive is bool
         && data.maintenanceBannerAr is string
         && data.maintenanceBannerAr.size() <= 400
@@ -773,7 +801,6 @@ service cloud.firestore {
     function isValidPrivatePlatformSettingsDoc(data) {
       return data.keys().hasOnly([
           'defaultSellerCommissionRate',
-          'minimumPayoutAmount',
           'payoutSlaBusinessDays',
           'requireVerifiedBadgeForFeatured',
           'autoApproveVerifiedSellerProducts',
@@ -787,8 +814,6 @@ service cloud.firestore {
         ])
         && isNonNegativeNumber(data.defaultSellerCommissionRate)
         && data.defaultSellerCommissionRate <= 50
-        && isNonNegativeNumber(data.minimumPayoutAmount)
-        && data.minimumPayoutAmount <= 1000000
         && data.payoutSlaBusinessDays is number
         && data.payoutSlaBusinessDays >= 1
         && data.payoutSlaBusinessDays <= 30

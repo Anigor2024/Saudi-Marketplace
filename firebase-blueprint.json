@@ -275,7 +275,7 @@
     },
     "PublicPlatformSettings": {
       "title": "PublicPlatformSettings",
-      "description": "Public storefront operational settings, support contacts, shipping fees, and storefront feature flags",
+      "description": "Public storefront operational settings, support contacts, shipping fees, minimum payout threshold, and storefront feature flags",
       "type": "object",
       "properties": {
         "marketplaceNameAr": { "type": "string" },
@@ -292,6 +292,7 @@
         "freeShippingThreshold": { "type": "number" },
         "standardShippingFee": { "type": "number" },
         "expressShippingFee": { "type": "number" },
+        "minimumPayoutAmount": { "type": "number" },
         "maintenanceBannerActive": { "type": "boolean" },
         "maintenanceBannerAr": { "type": "string" },
         "maintenanceBannerEn": { "type": "string" },
@@ -301,7 +302,7 @@
         "productQuestionsEnabled": { "type": "boolean" },
         "updatedAt": { "type": "string" }
       },
-      "required": ["marketplaceNameAr", "marketplaceNameEn", "supportEmail", "currencyCode", "vatRatePercent", "freeShippingThreshold", "standardShippingFee", "expressShippingFee", "checkoutEnabled"]
+      "required": ["marketplaceNameAr", "marketplaceNameEn", "supportEmail", "currencyCode", "vatRatePercent", "freeShippingThreshold", "standardShippingFee", "expressShippingFee", "minimumPayoutAmount", "checkoutEnabled"]
     },
     "PrivatePlatformSettings": {
       "title": "PrivatePlatformSettings",
@@ -309,7 +310,6 @@
       "type": "object",
       "properties": {
         "defaultSellerCommissionRate": { "type": "number" },
-        "minimumPayoutAmount": { "type": "number" },
         "payoutSlaBusinessDays": { "type": "number" },
         "requireVerifiedBadgeForFeatured": { "type": "boolean" },
         "autoApproveVerifiedSellerProducts": { "type": "boolean" },
@@ -321,7 +321,7 @@
         "updatedAt": { "type": "string" },
         "updatedBy": { "type": "string" }
       },
-      "required": ["defaultSellerCommissionRate", "minimumPayoutAmount", "payoutSlaBusinessDays", "returnWindowDays", "updatedAt", "updatedBy"]
+      "required": ["defaultSellerCommissionRate", "payoutSlaBusinessDays", "returnWindowDays", "updatedAt", "updatedBy"]
     }
   },
   "firestore": {
