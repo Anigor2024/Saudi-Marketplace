@@ -226,7 +226,7 @@ interface MarketplaceContextType {
 
   // Wishlist, Compare, Recently Viewed
   wishlistIds: string[];
-  toggleWishlist: (productId: string) => void;
+  toggleWishlist: (productId: string) => Promise<void>;
   compareIds: string[];
   toggleCompare: (productId: string) => void;
   clearCompare: () => void;
@@ -579,6 +579,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const sellerOwnProductsRef = React.useRef<Product[]>([]);
   const publicCouponsRef = React.useRef<Coupon[]>([]);
   const sellerOwnCouponsRef = React.useRef<Coupon[]>([]);
+  const publicReviewsRef = React.useRef<Review[]>([]);
   const currentRoleRef = React.useRef<{ role?: UserRole; sellerId?: string }>({});
 
   // Auth & Demo Mode State
@@ -592,7 +593,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       role: currentUser?.role,
       sellerId: currentUser?.sellerId,
     };
-  }, [currentUser?.role, currentUser?.sellerId]);
+    if (!isDemoMode && currentUser?.role !== 'admin') {
+      setReviews(publicReviewsRef.current);
+    }
+  }, [currentUser?.role, currentUser?.sellerId, isDemoMode]);
 
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -674,6 +678,15 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             const data = snap.data() as UserProfile;
             setCurrentUser({ ...data, id: fbUser.uid });
             setWishlistIds(Array.isArray(data.wishlist) ? data.wishlist : []);
+            if (data.role !== 'admin') {
+              setReviews(publicReviewsRef.current);
+              if (data.role !== 'seller') {
+                sellerOwnProductsRef.current = [];
+                sellerOwnCouponsRef.current = [];
+                setProducts(publicProductsRef.current);
+                setCoupons(publicCouponsRef.current);
+              }
+            }
           } else {
             const newProfile = buildDefaultCustomerProfile(
               fbUser.uid,
@@ -683,6 +696,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             await setDoc(userRef, newProfile);
             setCurrentUser(newProfile);
             setWishlistIds([]);
+            setReviews(publicReviewsRef.current);
+            sellerOwnProductsRef.current = [];
+            sellerOwnCouponsRef.current = [];
+            setProducts(publicProductsRef.current);
+            setCoupons(publicCouponsRef.current);
           }
         } catch (err) {
           logFirestoreFailure(err, OperationType.GET, `users/${fbUser.uid}`);
@@ -694,6 +712,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         });
         if (!isDemoMode) {
           setPrivateSellers([]);
+          setReviews(publicReviewsRef.current);
         }
       }
       setIsAuthLoading(false);
@@ -815,8 +834,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     const unsubReviews = onSnapshot(
       query(collection(db, 'reviews'), where('status', '==', 'approved')),
       (snap) => {
+        const publicApprovedReviews = snap.docs.map((d) => d.data() as Review);
+        publicReviewsRef.current = publicApprovedReviews;
         if (currentRoleRef.current.role !== 'admin') {
-          setReviews(snap.docs.map((d) => d.data() as Review));
+          setReviews(publicApprovedReviews);
         }
       },
       (err) => logFirestoreFailure(err, OperationType.LIST, 'reviews')
@@ -1343,9 +1364,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     setCurrentUser(null);
     sellerOwnProductsRef.current = [];
     sellerOwnCouponsRef.current = [];
-    setProducts([]);
-    setCoupons([]);
-    setReviews([]);
+    setProducts(publicProductsRef.current);
+    setCoupons(publicCouponsRef.current);
+    setReviews(publicReviewsRef.current);
     setQuestions([]);
     setUsers([]);
     setNotifications([]);
@@ -1408,6 +1429,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         }
 
         setCurrentUser(profile);
+        setWishlistIds(Array.isArray(profile.wishlist) ? profile.wishlist : []);
+        if (profile.role !== 'admin') {
+          setReviews(publicReviewsRef.current);
+          if (profile.role !== 'seller') {
+            sellerOwnProductsRef.current = [];
+            sellerOwnCouponsRef.current = [];
+            setProducts(publicProductsRef.current);
+            setCoupons(publicCouponsRef.current);
+          }
+        }
         showToast(
           lang === 'ar' ? `أهلاً بعودتك، ${profile.name}` : `Welcome back, ${profile.name}`,
           lang === 'ar' ? 'تم تسجيل الدخول بنجاح' : 'Signed in successfully',
@@ -1499,6 +1530,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         await setDoc(doc(db, 'users', fbUser.uid), newProfile);
         setCurrentUser(newProfile);
         setWishlistIds([]);
+        setReviews(publicReviewsRef.current);
+        sellerOwnProductsRef.current = [];
+        sellerOwnCouponsRef.current = [];
+        setProducts(publicProductsRef.current);
+        setCoupons(publicCouponsRef.current);
 
         showToast(
           lang === 'ar' ? `مرحباً بك في أثيل، ${cleanName}` : `Welcome to Atheel, ${cleanName}`,
@@ -1584,6 +1620,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
 
       setCurrentUser(profile);
+      setWishlistIds(Array.isArray(profile.wishlist) ? profile.wishlist : []);
+      if (profile.role !== 'admin') {
+        setReviews(publicReviewsRef.current);
+        if (profile.role !== 'seller') {
+          sellerOwnProductsRef.current = [];
+          sellerOwnCouponsRef.current = [];
+          setProducts(publicProductsRef.current);
+          setCoupons(publicCouponsRef.current);
+        }
+      }
       showToast(
         lang === 'ar' ? `مرحباً بك ${profile.name}` : `Welcome ${profile.name}`,
         lang === 'ar' ? 'تم تسجيل الدخول عبر حساب Google بنجاح' : 'Signed in with Google successfully',
@@ -1633,6 +1679,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     sellerOwnCouponsRef.current = [];
     setProducts(publicProductsRef.current);
     setCoupons(publicCouponsRef.current);
+    setReviews(publicReviewsRef.current);
     setOrders([]);
     setSellerFulfillments([]);
     setTickets([]);
@@ -1860,25 +1907,47 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   // Wishlist & Compare
   const toggleWishlist = useCallback(
-    (productId: string) => {
-      setWishlistIds((prev) => {
-        const exists = prev.includes(productId);
-        const next = exists ? prev.filter((id) => id !== productId) : [productId, ...prev];
-        showToast(
-          exists
-            ? lang === 'ar'
-              ? 'تمت الإزالة من قائمة الأمنيات'
-              : 'Removed from Wishlist'
-            : lang === 'ar'
-            ? 'تمت الإضافة إلى قائمة الأمنيات ♥'
-            : 'Saved to Wishlist ♥',
-          undefined,
-          'info'
-        );
-        return next;
-      });
+    async (productId: string) => {
+      const exists = wishlistIds.includes(productId);
+      const nextWishlist = exists
+        ? wishlistIds.filter((id) => id !== productId)
+        : [productId, ...wishlistIds];
+
+      if (!isDemoMode && currentUser && auth.currentUser) {
+        try {
+          await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+            wishlist: nextWishlist,
+          });
+        } catch (err) {
+          logFirestoreFailure(err, OperationType.UPDATE, `users/${auth.currentUser.uid}`);
+          showToast(
+            lang === 'ar'
+              ? 'تعذر تحديث قائمة الأمنيات في قاعدة البيانات'
+              : 'Failed to update wishlist in database',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setWishlistIds(nextWishlist);
+      if (currentUser) {
+        setCurrentUser((prev) => (prev ? { ...prev, wishlist: nextWishlist } : prev));
+      }
+      showToast(
+        exists
+          ? lang === 'ar'
+            ? 'تمت الإزالة من قائمة الأمنيات'
+            : 'Removed from Wishlist'
+          : lang === 'ar'
+          ? 'تمت الإضافة إلى قائمة الأمنيات ♥'
+          : 'Saved to Wishlist ♥',
+        undefined,
+        'info'
+      );
     },
-    [lang, showToast]
+    [wishlistIds, isDemoMode, currentUser, lang, showToast]
   );
 
   const toggleCompare = useCallback(
@@ -2203,13 +2272,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
 
       setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+      const cancelDetailMsg =
+        target.paymentMethod === 'cod'
+          ? lang === 'ar'
+            ? 'الدفع عند الاستلام — لا تتطلب العملية تسوية استرداد إلكتروني.'
+            : 'Cash on Delivery — no online refund settlement is required.'
+          : lang === 'ar'
+          ? 'تم إلغاء الطلب. أي تسوية مالية مرتبطة بوسيلة دفع خارجية تتطلب تأكيد نظام الدفع الموثوق.'
+          : 'Order cancelled. Any external payment reversal requires trusted payment-provider confirmation.';
       showToast(
         lang === 'ar'
           ? `تم إلغاء الطلب #${target.orderNumber}`
           : `Order #${target.orderNumber} Cancelled`,
-        lang === 'ar'
-          ? 'سيتم استرداد المبلغ تلقائياً إلى وسيلة الدفع أو المحفظة'
-          : 'Refund initiated automatically',
+        cancelDetailMsg,
         'info'
       );
     },

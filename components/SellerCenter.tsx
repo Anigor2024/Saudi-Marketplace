@@ -61,6 +61,7 @@ export default function SellerCenter() {
     isDemoMode,
     canAccessSellerDashboard,
     sellers,
+    privateSellers,
     products,
     categories,
     orders,
@@ -85,35 +86,58 @@ export default function SellerCenter() {
   );
 
   const effectiveSellerId = useMemo(() => {
-    if (!isDemoMode && currentUser?.role === 'seller' && currentUser.sellerId) {
-      return currentUser.sellerId;
+    if (!isDemoMode) {
+      if (currentUser?.role === 'seller') {
+        return currentUser.sellerId || '';
+      }
+      if (currentUser?.role === 'admin') {
+        return demoSelectedSellerId || sellers[0]?.id || '';
+      }
+      return '';
     }
-    return currentUser?.sellerId && !isDemoMode
-      ? currentUser.sellerId
-      : demoSelectedSellerId || currentUser?.sellerId || 'seller-2';
-  }, [isDemoMode, currentUser, demoSelectedSellerId]);
-
-  const hasAuthorizedSellerRecord = useMemo(() => {
-    if (isDemoMode) return true;
-    if (currentUser?.role === 'seller') {
-      return Boolean(currentUser.sellerId && sellers.some((s) => s.id === currentUser.sellerId));
-    }
-    return sellers.length > 0;
-  }, [isDemoMode, currentUser, sellers]);
+    return demoSelectedSellerId || currentUser?.sellerId || 'seller-2';
+  }, [isDemoMode, currentUser, demoSelectedSellerId, sellers]);
 
   const activeSeller = useMemo(() => {
-    return (
-      sellers.find((s) => s.id === effectiveSellerId) ||
-      sellers[1] ||
-      sellers[0] ||
-      INITIAL_SELLERS[1]
-    );
-  }, [sellers, effectiveSellerId]);
+    if (isDemoMode) {
+      return (
+        sellers.find((s) => s.id === effectiveSellerId) ||
+        sellers[1] ||
+        sellers[0] ||
+        INITIAL_SELLERS[1]
+      );
+    }
+    if (!currentUser) return null;
+    if (currentUser.role === 'seller') {
+      if (!currentUser.sellerId) return null;
+      return (
+        privateSellers.find((s) => s.id === currentUser.sellerId) ||
+        sellers.find((s) => s.id === currentUser.sellerId) ||
+        null
+      );
+    }
+    if (currentUser.role === 'admin') {
+      return (
+        privateSellers.find((s) => s.id === effectiveSellerId) ||
+        sellers.find((s) => s.id === effectiveSellerId) ||
+        privateSellers[0] ||
+        sellers[0] ||
+        null
+      );
+    }
+    return null;
+  }, [isDemoMode, currentUser, sellers, privateSellers, effectiveSellerId]);
+
+  const hasAuthorizedSellerRecord = useMemo(() => {
+    return Boolean(activeSeller);
+  }, [activeSeller]);
+
+  const activeSellerId = activeSeller?.id || '';
 
   // Strictly scoped Seller Data
   const sellerProducts = useMemo(
-    () => products.filter((p) => p.sellerId === activeSeller.id),
-    [products, activeSeller.id]
+    () => (activeSellerId ? products.filter((p) => p.sellerId === activeSellerId) : []),
+    [products, activeSellerId]
   );
 
   const sellerProductIds = useMemo(
@@ -123,17 +147,19 @@ export default function SellerCenter() {
 
   const sellerOrders = useMemo(
     () =>
-      orders.filter(
-        (o) =>
-          o.sellerIds?.includes(activeSeller.id) ||
-          o.items.some((item) => item.sellerId === activeSeller.id)
-      ),
-    [orders, activeSeller.id]
+      activeSellerId
+        ? orders.filter(
+            (o) =>
+              o.sellerIds?.includes(activeSellerId) ||
+              o.items.some((item) => item.sellerId === activeSellerId)
+          )
+        : [],
+    [orders, activeSellerId]
   );
 
   const sellerCoupons = useMemo(
-    () => coupons.filter((c) => c.sellerId === activeSeller.id),
-    [coupons, activeSeller.id]
+    () => (activeSellerId ? coupons.filter((c) => c.sellerId === activeSellerId) : []),
+    [coupons, activeSellerId]
   );
 
   const sellerQuestions = useMemo(
@@ -150,6 +176,27 @@ export default function SellerCenter() {
   // CALCULATE ALL 12 MERCHANT KPIs STRICTLY FROM THIS SELLER'S DATA
   // ============================================================================
   const kpis = useMemo(() => {
+    if (!activeSeller) {
+      return {
+        grossSales: 0,
+        netEarnings: 0,
+        platformCommission: 0,
+        totalOrders: 0,
+        unitsSold: 0,
+        avgOrderValue: 0,
+        returnRate: 0,
+        returnOrdersCount: 0,
+        avgProductRating: 0,
+        availableBalance: 0,
+        pendingPayout: 0,
+        lowStockCount: 0,
+        criticalStockCount: 0,
+        outOfStockCount: 0,
+        newPlacedCount: 0,
+        unansweredCount: 0,
+      };
+    }
+
     // Calculate live order gross & units for this seller
     let orderUnits = 0;
     let orderGrossSum = 0;
@@ -246,6 +293,14 @@ export default function SellerCenter() {
   // Prefers actual seller order items (mapping item.productId -> seller's catalog product categoryId)
   // and incorporates seller catalog product performance without Math.random.
   const categoryAnalytics = useMemo(() => {
+    if (!activeSeller) {
+      return {
+        rows: [],
+        totalCategoryRevenue: 0,
+        totalCategoryUnits: 0,
+      };
+    }
+
     const productMap = new Map(sellerProducts.map((p) => [p.id, p]));
     const catStats = new Map<
       string,
@@ -316,7 +371,7 @@ export default function SellerCenter() {
       totalCategoryRevenue,
       totalCategoryUnits,
     };
-  }, [sellerProducts, sellerOrders, categories, activeSeller.id, activeSeller.categories]);
+  }, [sellerProducts, sellerOrders, categories, activeSeller]);
 
   // Navigation Items with Live Badges
   const navItems: {
@@ -465,6 +520,7 @@ export default function SellerCenter() {
 
   // Export Analytics CSV
   const handleExportAnalyticsCsv = () => {
+    if (!activeSeller) return;
     const headers = ['SKU', 'Product Title', 'Price (SAR)', 'Stock', 'Units Sold', 'Rating', 'Estimated Revenue (SAR)'];
     const rows = sellerProducts.map((p) => [
       p.sku,
@@ -493,8 +549,10 @@ export default function SellerCenter() {
   if (
     !canAccessSellerDashboard ||
     !hasAuthorizedSellerRecord ||
+    !activeSeller ||
     (currentUser?.role !== 'admin' && activeSeller.status !== 'approved')
   ) {
+    const isSuspended = activeSeller?.status === 'suspended';
     return (
       <div className="min-h-[75vh] bg-[#FAF8F5] flex items-center justify-center px-4 py-16">
         <div className="max-w-lg w-full bg-white rounded-2xl border border-[#E5E0D8] p-8 text-center shadow-sm">
@@ -502,12 +560,12 @@ export default function SellerCenter() {
             <AlertTriangle className="w-8 h-8" />
           </div>
           <h2 className="text-xl font-bold text-[#141413]">
-            {activeSeller.status === 'suspended'
+            {isSuspended
               ? t('تم إيقاف حساب المتجر مؤقتاً', 'Seller Account Suspended')
               : t('غير مصرح بالوصول إلى بوابة التجار', 'Seller Center Access Denied')}
           </h2>
           <p className="text-sm text-[#6B675E] mt-2 leading-relaxed">
-            {activeSeller.status === 'suspended'
+            {isSuspended
               ? t(
                   'تم تعليق صلاحيات بوابة التجار لهذا المتجر من قِبل الإدارة التنفيذية. جميع عمليات الكتالوج والطلبات والتحويلات موقوفة حتى إعادة التفعيل.',
                   'Seller Center privileges for this boutique have been suspended by Executive Operations. All catalog, order, and payout operations are blocked until reinstatement.'

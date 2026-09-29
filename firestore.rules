@@ -495,6 +495,7 @@ service cloud.firestore {
             && request.resource.data.get('loyaltyPoints', 0) == resource.data.get('loyaltyPoints', 0)
             && request.resource.data.get('loyaltyTier', 'Silver') == resource.data.get('loyaltyTier', 'Silver')
             && request.resource.data.get('loyaltyHistory', []) == resource.data.get('loyaltyHistory', [])
+            && (!('wishlist' in request.resource.data) || (request.resource.data.wishlist is list && request.resource.data.wishlist.size() <= 200))
           )
         );
 
