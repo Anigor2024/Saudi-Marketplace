@@ -32,6 +32,8 @@ import {
   Building2,
 } from 'lucide-react';
 import { MarketplaceProvider, useMarketplace } from '../context/MarketplaceContext';
+import { deriveAggregateOrderStatus } from '../lib/types';
+import { buildSellerFulfillmentsForOrder } from '../lib/seed-catalog';
 import { NavbarAndMegaMenu } from '../components/NavbarAndMegaMenu';
 import { HomeView } from '../components/HomeView';
 import { ProductCard } from '../components/ProductCard';
@@ -77,6 +79,7 @@ function MarketplaceShell() {
     compareIds,
     clearCompare,
     orders,
+    sellerFulfillments,
     reviews,
     cancelOrder,
     requestReturn,
@@ -1499,116 +1502,239 @@ function MarketplaceShell() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {orders.map((order) => (
-                      <div
-                        key={order.id}
-                        className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-4"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#F3EFEA] pb-4">
-                          <div>
-                            <div className="flex items-center gap-2.5">
-                              <span className="text-base font-bold font-mono text-[#141413]">
-                                #{order.orderNumber}
-                              </span>
-                              <span className="px-2.5 py-0.5 rounded-md bg-[#EBF3F0] text-[#0B4F3F] text-xs font-bold uppercase">
-                                {order.status}
-                              </span>
+                    {orders.map((order) => {
+                      const liveOrderFulfillments = sellerFulfillments.filter(
+                        (f) => f.orderId === order.id
+                      );
+                      const effectiveFulfillments =
+                        liveOrderFulfillments.length > 0
+                          ? liveOrderFulfillments
+                          : buildSellerFulfillmentsForOrder(order);
+                      const derivedStatus = deriveAggregateOrderStatus(
+                        order,
+                        effectiveFulfillments
+                      );
+                      const isMultiVendorOrder = effectiveFulfillments.length > 1;
+                      const deliveredShipmentsCount = effectiveFulfillments.filter(
+                        (f) => f.status === 'delivered'
+                      ).length;
+                      const isPartiallyDelivered =
+                        isMultiVendorOrder &&
+                        deliveredShipmentsCount > 0 &&
+                        deliveredShipmentsCount < effectiveFulfillments.length;
+
+                      return (
+                        <div
+                          key={order.id}
+                          className="bg-white rounded-2xl border border-[#E6E0D6] p-6 space-y-5"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#F3EFEA] pb-4">
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2.5">
+                                <span className="text-base font-bold font-mono text-[#141413]">
+                                  #{order.orderNumber}
+                                </span>
+                                <span className="px-2.5 py-0.5 rounded-md bg-[#EBF3F0] text-[#0B4F3F] text-xs font-bold uppercase">
+                                  {isPartiallyDelivered
+                                    ? t(
+                                        `تسليم جزئي (${deliveredShipmentsCount}/${effectiveFulfillments.length} شحنات)`,
+                                        `Partially Delivered (${deliveredShipmentsCount}/${effectiveFulfillments.length} Shipments)`
+                                      )
+                                    : derivedStatus}
+                                </span>
+                                {isMultiVendorOrder && (
+                                  <span className="px-2.5 py-0.5 rounded-md bg-[#FAF8F5] border border-[#E6E0D6] text-[11px] font-bold text-[#57534E]">
+                                    {t(
+                                      `${effectiveFulfillments.length} شحنات مستقلة حسب البوتيك`,
+                                      `${effectiveFulfillments.length} Seller-Isolated Shipments`
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs text-[#57534E] mt-1">
+                                {order.customerName} · {order.address.cityAr} —{' '}
+                                {order.address.districtAr} ·{' '}
+                                <span className="font-mono">{order.createdAt.split('T')[0]}</span>
+                              </div>
                             </div>
-                            <div className="text-xs text-[#57534E] mt-1">
-                              {order.customerName} · {order.address.cityAr} —{' '}
-                              {order.address.districtAr} ·{' '}
-                              <span className="font-mono">{order.trackingNumber}</span>
+
+                            <div className="text-end">
+                              <div className="text-lg font-bold font-mono text-[#0B4F3F]">
+                                {formatPrice(order.total)}
+                              </div>
+                              <div className="text-[11px] text-[#8C857B]">
+                                {t('شامل الضريبة ١٥٪:', 'Incl. 15% VAT:')}{' '}
+                                <span className="font-mono">{formatPrice(order.vatAmount)}</span>
+                              </div>
                             </div>
                           </div>
 
-                          <div className="text-end">
-                            <div className="text-lg font-bold font-mono text-[#0B4F3F]">
-                              {formatPrice(order.total)}
-                            </div>
-                            <div className="text-[11px] text-[#8C857B]">
-                              {t('شامل الضريبة ١٥٪:', 'Incl. 15% VAT:')}{' '}
-                              <span className="font-mono">{formatPrice(order.vatAmount)}</span>
-                            </div>
-                          </div>
-                        </div>
+                          {/* Seller-Specific Shipments Breakdown */}
+                          <div className="space-y-3">
+                            {effectiveFulfillments.map((shipment, sIdx) => {
+                              const shipmentItems = order.items.filter(
+                                (item) => item.sellerId === shipment.sellerId
+                              );
+                              const sellerObj = sellers.find((s) => s.id === shipment.sellerId);
+                              const sellerNameAr =
+                                sellerObj?.nameAr ||
+                                shipmentItems[0]?.sellerNameAr ||
+                                shipment.sellerId;
+                              const sellerNameEn =
+                                sellerObj?.nameEn ||
+                                shipmentItems[0]?.sellerNameEn ||
+                                shipment.sellerId;
+                              const latestEvent = [...(shipment.timeline || [])]
+                                .reverse()
+                                .find((ev) => ev.completed);
 
-                        <div className="divide-y divide-[#F3EFEA]">
-                          {order.items.map((item, idx) => (
-                            <div
-                              key={idx}
-                              className="py-3 flex items-center justify-between gap-4 text-xs"
-                            >
-                              <div className="flex items-center gap-3">
-                                <img
-                                  src={item.image}
-                                  alt={lang === 'ar' ? item.titleAr : item.titleEn}
-                                  referrerPolicy="no-referrer"
-                                  className="w-12 h-12 rounded-xl object-cover bg-[#F3EFEA]"
-                                />
-                                <div>
-                                  <div className="font-bold text-[#141413]">
-                                    {lang === 'ar' ? item.titleAr : item.titleEn}
+                              return (
+                                <div
+                                  key={shipment.id}
+                                  className="rounded-xl border border-[#E6E0D6] bg-[#FAF8F5]/70 p-4 space-y-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E6E0D6] pb-2.5">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Store className="w-4 h-4 text-[#0B4F3F]" />
+                                      <span className="text-xs font-bold text-[#141413]">
+                                        {t(
+                                          `شحنة رقم ${sIdx + 1}: ${sellerNameAr}`,
+                                          `Shipment #${sIdx + 1}: ${sellerNameEn}`
+                                        )}
+                                      </span>
+                                      <span
+                                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                          shipment.status === 'delivered'
+                                            ? 'bg-[#EBF3F0] text-[#1E6B47]'
+                                            : shipment.status === 'shipped' ||
+                                              shipment.status === 'out_for_delivery'
+                                            ? 'bg-indigo-50 text-indigo-800'
+                                            : 'bg-[#FBF7EC] text-[#B8860B] border border-[#C59B27]/40'
+                                        }`}
+                                      >
+                                        {shipment.status}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                                      <span className="text-[#57534E]">
+                                        {t('الناقل:', 'Carrier:')}{' '}
+                                        <strong className="text-[#141413]">
+                                          {lang === 'ar'
+                                            ? shipment.carrierAr
+                                            : shipment.carrierEn}
+                                        </strong>
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded bg-white border border-[#E6E0D6] font-mono font-bold text-[#0B4F3F]">
+                                        {shipment.trackingNumber}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <div className="text-[#8C857B]">
-                                    {lang === 'ar' ? item.sellerNameAr : item.sellerNameEn} ·{' '}
-                                    {t('الكمية:', 'Qty:')} {item.quantity}
+
+                                  <div className="divide-y divide-[#E6E0D6]/60">
+                                    {shipmentItems.map((item, idx) => (
+                                      <div
+                                        key={idx}
+                                        className="py-2.5 flex items-center justify-between gap-4 text-xs"
+                                      >
+                                        <div className="flex items-center gap-3">
+                                          <img
+                                            src={item.image}
+                                            alt={lang === 'ar' ? item.titleAr : item.titleEn}
+                                            referrerPolicy="no-referrer"
+                                            className="w-11 h-11 rounded-xl object-cover bg-white border border-[#E6E0D6]"
+                                          />
+                                          <div>
+                                            <div className="font-bold text-[#141413]">
+                                              {lang === 'ar' ? item.titleAr : item.titleEn}
+                                            </div>
+                                            <div className="text-[#8C857B]">
+                                              {t('الكمية:', 'Qty:')} {item.quantity} · SKU:{' '}
+                                              <span className="font-mono">{item.sku}</span>
+                                            </div>
+                                          </div>
+                                        </div>
+                                        <div className="font-mono font-bold text-[#141413]">
+                                          {formatPrice(item.unitPrice * item.quantity)}
+                                        </div>
+                                      </div>
+                                    ))}
                                   </div>
+
+                                  {latestEvent && (
+                                    <div className="pt-2 border-t border-[#E6E0D6]/60 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#57534E]">
+                                      <div>
+                                        <span className="font-bold text-[#0B4F3F]">
+                                          {lang === 'ar'
+                                            ? latestEvent.titleAr
+                                            : latestEvent.titleEn}
+                                          :
+                                        </span>{' '}
+                                        <span>
+                                          {lang === 'ar'
+                                            ? latestEvent.descriptionAr
+                                            : latestEvent.descriptionEn}
+                                        </span>
+                                      </div>
+                                      <span className="font-mono text-[10px] text-[#8C857B]">
+                                        {latestEvent.timestamp}
+                                      </span>
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
-                              <div className="font-mono font-bold text-[#141413]">
-                                {formatPrice(item.unitPrice * item.quantity)}
-                              </div>
+                              );
+                            })}
+                          </div>
+
+                          <div className="pt-3 border-t border-[#F3EFEA] flex flex-wrap items-center justify-between gap-3 text-xs">
+                            <div className="text-[#57534E]">
+                              {t('حالة الطلب الإجمالية (مشتقة تلقائياً):', 'Aggregate Order State (Derived):')}{' '}
+                              <span className="font-bold text-[#141413] uppercase">
+                                {derivedStatus}
+                              </span>{' '}
+                              · {t('وسيلة الدفع:', 'Payment:')}{' '}
+                              <span className="font-mono uppercase font-bold text-[#141413]">
+                                {order.paymentMethod}
+                              </span>
                             </div>
-                          ))}
-                        </div>
 
-                        <div className="pt-3 border-t border-[#F3EFEA] flex flex-wrap items-center justify-between gap-3 text-xs">
-                          <div className="text-[#57534E]">
-                            {t('الناقل المعتمد:', 'Carrier:')}{' '}
-                            <span className="font-bold text-[#141413]">
-                              {lang === 'ar' ? order.carrierAr : order.carrierEn}
-                            </span>{' '}
-                            · {t('وسيلة الدفع:', 'Payment:')}{' '}
-                            <span className="font-mono uppercase font-bold text-[#141413]">
-                              {order.paymentMethod}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            {(order.status === 'placed' || order.status === 'confirmed') && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  cancelOrder(
-                                    order.id,
-                                    t('طلب إلغاء من العميل', 'Cancelled by customer')
-                                  )
-                                }
-                                className="px-3.5 py-1.5 rounded-lg border border-[#9E2A2B]/30 text-[#9E2A2B] hover:bg-red-50 font-semibold"
-                              >
-                                {t('إلغاء الطلب', 'Cancel Order')}
-                              </button>
-                            )}
-                            {order.status === 'delivered' && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  requestReturn(
-                                    order.id,
-                                    t('استبدال أو إرجاع ضمن الضمان', 'Return within policy'),
-                                    t('طلب استرجاع إلى محفظة أثيل', 'Refund to Atheel Wallet'),
-                                    'wallet'
-                                  )
-                                }
-                                className="px-3.5 py-1.5 rounded-lg border border-[#E6E0D6] hover:bg-[#FAF8F5] font-semibold"
-                              >
-                                {t('طلب إرجاع مجاني', 'Request Free Return')}
-                              </button>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {(derivedStatus === 'placed' || derivedStatus === 'confirmed') &&
+                                deliveredShipmentsCount === 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      cancelOrder(
+                                        order.id,
+                                        t('طلب إلغاء من العميل', 'Cancelled by customer')
+                                      )
+                                    }
+                                    className="px-3.5 py-1.5 rounded-lg border border-[#9E2A2B]/30 text-[#9E2A2B] hover:bg-red-50 font-semibold"
+                                  >
+                                    {t('إلغاء الطلب', 'Cancel Order')}
+                                  </button>
+                                )}
+                              {derivedStatus === 'delivered' && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    requestReturn(
+                                      order.id,
+                                      t('استبدال أو إرجاع ضمن الضمان', 'Return within policy'),
+                                      t('طلب استرجاع إلى محفظة أثيل', 'Refund to Atheel Wallet'),
+                                      'wallet'
+                                    )
+                                  }
+                                  className="px-3.5 py-1.5 rounded-lg border border-[#E6E0D6] hover:bg-[#FAF8F5] font-semibold"
+                                >
+                                  {t('طلب إرجاع مجاني', 'Request Free Return')}
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

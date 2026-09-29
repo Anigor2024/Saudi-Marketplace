@@ -127,6 +127,29 @@
       },
       "required": ["id", "orderNumber", "customerId", "total", "status", "createdAt"]
     },
+    "SellerFulfillment": {
+      "title": "SellerFulfillment",
+      "description": "Seller-isolated fulfillment record for an order shipment, preventing cross-vendor status/tracking tampering in multi-vendor orders",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderId": { "type": "string" },
+        "sellerId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "sellerItemProductIds": { "type": "array", "items": { "type": "string" } },
+        "status": {
+          "type": "string",
+          "enum": ["confirmed", "preparing", "shipped", "out_for_delivery", "delivered"]
+        },
+        "trackingNumber": { "type": "string" },
+        "carrierAr": { "type": "string" },
+        "carrierEn": { "type": "string" },
+        "timeline": { "type": "array", "items": { "type": "object" } },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "orderId", "sellerId", "customerId", "sellerItemProductIds", "status", "carrierAr", "carrierEn", "timeline", "createdAt", "updatedAt"]
+    },
     "Coupon": {
       "title": "Coupon",
       "description": "Promotional discount code with percentage or fixed discount, minimum order, and seller scope",
@@ -339,7 +362,11 @@
     },
     "/orders/{orderId}": {
       "schema": { "$ref": "#/entities/Order" },
-      "description": "Customer orders and fulfillment state"
+      "description": "Customer orders and order-level financial/return state"
+    },
+    "/sellerFulfillments/{fulfillmentId}": {
+      "schema": { "$ref": "#/entities/SellerFulfillment" },
+      "description": "Seller-isolated fulfillment records ({orderId}_{sellerId}) for multi-vendor shipment tracking"
     },
     "/coupons/{couponId}": {
       "schema": { "$ref": "#/entities/Coupon" },

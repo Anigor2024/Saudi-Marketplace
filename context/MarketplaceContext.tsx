@@ -42,6 +42,9 @@ import {
   SaudiAddress,
   Order,
   OrderStatus,
+  SellerFulfillment,
+  SellerFulfillmentStatus,
+  SELLER_FULFILLMENT_STATUSES,
   PaymentMethodType,
   Review,
   ProductQuestion,
@@ -61,6 +64,7 @@ import {
   INITIAL_COUPONS,
   INITIAL_USERS,
   INITIAL_ORDERS,
+  INITIAL_SELLER_FULFILLMENTS,
   INITIAL_REVIEWS,
   INITIAL_QUESTIONS,
   INITIAL_NOTIFICATIONS,
@@ -70,6 +74,7 @@ import {
   INITIAL_PUBLIC_PLATFORM_SETTINGS,
   INITIAL_PRIVATE_PLATFORM_SETTINGS,
   buildOrderTimeline,
+  buildSellerFulfillmentsForOrder,
 } from '../lib/seed-catalog';
 import { SEED_PRODUCTS_PART_A } from '../lib/seed-products-a';
 import { SEED_PRODUCTS_PART_B } from '../lib/seed-products-b';
@@ -162,6 +167,7 @@ interface MarketplaceContextType {
   sellers: Seller[];
   coupons: Coupon[];
   orders: Order[];
+  sellerFulfillments: SellerFulfillment[];
   reviews: Review[];
   questions: ProductQuestion[];
   users: UserProfile[];
@@ -259,6 +265,15 @@ interface MarketplaceContextType {
   deleteProduct: (productId: string) => Promise<void>;
   bulkUpdateProductStatus: (productIds: string[], status: ProductStatus) => Promise<void>;
   updateProductStock: (productId: string, newStock: number, lowStockThreshold?: number) => Promise<void>;
+  updateSellerFulfillmentStatus: (
+    orderId: string,
+    newStatus: SellerFulfillmentStatus,
+    trackingNumber?: string,
+    carrierAr?: string,
+    carrierEn?: string,
+    fulfillmentNote?: string,
+    targetSellerId?: string
+  ) => Promise<void>;
   updateOrderStatus: (
     orderId: string,
     newStatus: OrderStatus,
@@ -542,6 +557,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [privateSellers, setPrivateSellers] = useState<Seller[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>(INITIAL_COUPONS);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [sellerFulfillments, setSellerFulfillments] = useState<SellerFulfillment[]>([]);
   const [reviews, setReviews] = useState<Review[]>(INITIAL_REVIEWS);
   const [questions, setQuestions] = useState<ProductQuestion[]>(INITIAL_QUESTIONS);
   const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
@@ -812,7 +828,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     );
 
     const unsubReviews = onSnapshot(
-      collection(db, 'reviews'),
+      query(collection(db, 'reviews'), where('status', '==', 'approved')),
       (snap) => {
         if (!snap.empty) {
           setReviews(snap.docs.map((d) => d.data() as Review));
@@ -877,9 +893,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
     let unsubPrivateSellers: (() => void) | undefined;
     let unsubOrders: (() => void) | undefined;
+    let unsubSellerFulfillments: (() => void) | undefined;
     let unsubLogs: (() => void) | undefined;
     let unsubAllProducts: (() => void) | undefined;
     let unsubAllCoupons: (() => void) | undefined;
+    let unsubAllReviews: (() => void) | undefined;
     let unsubAllTickets: (() => void) | undefined;
     let unsubAllUsers: (() => void) | undefined;
     let unsubPrivateSettings: (() => void) | undefined;
@@ -910,6 +928,24 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
           setOrders(list);
         },
         (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
+      );
+
+      unsubSellerFulfillments = onSnapshot(
+        collection(db, 'sellerFulfillments'),
+        (snap) => {
+          setSellerFulfillments(snap.docs.map((d) => d.data() as SellerFulfillment));
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'sellerFulfillments')
+      );
+
+      unsubAllReviews = onSnapshot(
+        collection(db, 'reviews'),
+        (snap) => {
+          if (!snap.empty) {
+            setReviews(snap.docs.map((d) => d.data() as Review));
+          }
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'reviews')
       );
 
       unsubLogs = onSnapshot(
@@ -986,6 +1022,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
       );
 
+      unsubSellerFulfillments = onSnapshot(
+        query(
+          collection(db, 'sellerFulfillments'),
+          where('sellerId', '==', currentUser.sellerId)
+        ),
+        (snap) => {
+          setSellerFulfillments(snap.docs.map((d) => d.data() as SellerFulfillment));
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'sellerFulfillments')
+      );
+
       unsubAllTickets = onSnapshot(
         query(collection(db, 'tickets'), where('userId', '==', auth.currentUser.uid)),
         (snap) => {
@@ -994,7 +1041,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         (err) => logFirestoreFailure(err, OperationType.LIST, 'tickets')
       );
     } else {
-      // Authenticated customer: load own orders, own tickets, and any pending seller application they submitted
+      // Authenticated customer: load own orders, own sellerFulfillments, own tickets, and any pending seller application they submitted
       unsubPrivateSellers = onSnapshot(
         query(collection(db, 'sellers'), where('applicantUserId', '==', auth.currentUser.uid)),
         (snap) => {
@@ -1013,6 +1060,17 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         (err) => logFirestoreFailure(err, OperationType.LIST, 'orders')
       );
 
+      unsubSellerFulfillments = onSnapshot(
+        query(
+          collection(db, 'sellerFulfillments'),
+          where('customerId', '==', auth.currentUser.uid)
+        ),
+        (snap) => {
+          setSellerFulfillments(snap.docs.map((d) => d.data() as SellerFulfillment));
+        },
+        (err) => logFirestoreFailure(err, OperationType.LIST, 'sellerFulfillments')
+      );
+
       unsubAllTickets = onSnapshot(
         query(collection(db, 'tickets'), where('userId', '==', auth.currentUser.uid)),
         (snap) => {
@@ -1025,9 +1083,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     return () => {
       unsubPrivateSellers?.();
       unsubOrders?.();
+      unsubSellerFulfillments?.();
       unsubLogs?.();
       unsubAllProducts?.();
       unsubAllCoupons?.();
+      unsubAllReviews?.();
       unsubAllTickets?.();
       unsubAllUsers?.();
       unsubPrivateSettings?.();
@@ -1202,6 +1262,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       setPublicSellers((prev) => (prev.length > 0 ? prev : INITIAL_PUBLIC_SELLERS));
       setPrivateSellers((prev) => (prev.length > 0 ? prev : INITIAL_SELLERS));
       setOrders(INITIAL_ORDERS);
+      setSellerFulfillments(INITIAL_SELLER_FULFILLMENTS);
       setTickets(INITIAL_TICKETS);
       setAuditLogs(INITIAL_AUDIT_LOGS);
 
@@ -1242,6 +1303,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     setPublicSellers([]);
     setPrivateSellers([]);
     setOrders([]);
+    setSellerFulfillments([]);
     setTickets([]);
     setAuditLogs([]);
     showToast(
@@ -1511,6 +1573,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     setIsDemoMode(false);
     setCurrentUser(null);
     setOrders([]);
+    setSellerFulfillments([]);
     setAuditLogs([]);
     showToast(
       lang === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Signed Out Successfully',
@@ -1947,6 +2010,18 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
       // Update local state after successful persistence (or in Demo Mode)
       setOrders((prev) => [newOrder, ...prev]);
+      if (isDemoMode) {
+        // Trusted Creation Boundary:
+        // In production architecture, authoritative `sellerFulfillments` documents are provisioned
+        // by a trusted backend / Cloud Function alongside order creation (so a Buyer client cannot
+        // fabricate arbitrary fulfillment records). In isolated Demo Mode, we create local fulfillment
+        // records in memory so multi-vendor shipment tracking and Seller Center workflows can be tested.
+        const localFulfillments = buildSellerFulfillmentsForOrder({
+          ...newOrder,
+          status: 'confirmed',
+        });
+        setSellerFulfillments((prev) => [...localFulfillments, ...prev]);
+      }
       setLastCreatedOrder(newOrder);
       setCurrentUser(updatedUser);
 
@@ -2270,14 +2345,23 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         ? currentUser.id
         : auth.currentUser?.uid || currentUser.id;
 
-      // Determine whether the customer actually has a DELIVERED order whose immutable `productIds` includes this product
-      const deliveredOrder = orders.find(
-        (o) =>
-          o.customerId === effectiveUserId &&
-          o.status === 'delivered' &&
-          Array.isArray(o.productIds) &&
-          o.productIds.includes(productId)
-      );
+      // Determine whether the customer actually has a DELIVERED shipment/order for this product:
+      // - For multi-vendor orders, check the seller-specific fulfillment (`sellerFulfillments/{orderId}_{sellerId}`)
+      //   for the seller who sold `productId`, or fall back to single-vendor delivered order status.
+      const deliveredOrder = orders.find((o) => {
+        if (o.customerId !== effectiveUserId) return false;
+        if (!Array.isArray(o.productIds) || !o.productIds.includes(productId)) return false;
+        const matchingItem = o.items.find((it) => it.productId === productId);
+        const itemSellerId = matchingItem?.sellerId;
+        const orderFulfillments = sellerFulfillments.filter((f) => f.orderId === o.id);
+        if (orderFulfillments.length > 0 && itemSellerId) {
+          const sellerFulfillment = orderFulfillments.find((f) => f.sellerId === itemSellerId);
+          if (sellerFulfillment) {
+            return sellerFulfillment.status === 'delivered';
+          }
+        }
+        return o.status === 'delivered';
+      });
       const isVerifiedBuyer = Boolean(deliveredOrder);
 
       const targetProd = products.find((p) => p.id === productId);
@@ -2334,6 +2418,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     [
       products,
       orders,
+      sellerFulfillments,
       currentUser,
       isDemoMode,
       lang,
@@ -2792,6 +2877,155 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     [currentUser, isDemoMode, products, addAuditLog, lang, showToast]
   );
 
+  const updateSellerFulfillmentStatus = useCallback(
+    async (
+      orderId: string,
+      newStatus: SellerFulfillmentStatus,
+      trackingNumber?: string,
+      carrierAr?: string,
+      carrierEn?: string,
+      fulfillmentNote?: string,
+      targetSellerId?: string
+    ) => {
+      if (!ensureActiveSellerOrAdmin() || !currentUser) return;
+      if (!SELLER_FULFILLMENT_STATUSES.includes(newStatus)) {
+        showToast(
+          lang === 'ar'
+            ? 'حالة تجهيز الشحنة غير صالحة'
+            : 'Invalid seller fulfillment status',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
+      const targetOrder = orders.find((o) => o.id === orderId);
+      if (!targetOrder) return;
+
+      const effectiveSellerId =
+        currentUser.role === 'seller'
+          ? currentUser.sellerId || ''
+          : targetSellerId ||
+            targetOrder.sellerIds?.[0] ||
+            targetOrder.items[0]?.sellerId ||
+            '';
+
+      if (!effectiveSellerId) return;
+
+      const sellerItems = targetOrder.items.filter((it) => it.sellerId === effectiveSellerId);
+      if (sellerItems.length === 0) {
+        showToast(
+          lang === 'ar'
+            ? 'لا توجد منتجات تابعة لمتجرك ضمن هذا الطلب'
+            : 'No items belonging to your store in this order',
+          undefined,
+          'error'
+        );
+        return;
+      }
+
+      const fulfillmentId = `${orderId}_${effectiveSellerId}`;
+      const existingFulfillment =
+        sellerFulfillments.find((f) => f.id === fulfillmentId) ||
+        buildSellerFulfillmentsForOrder(targetOrder).find((f) => f.id === fulfillmentId);
+
+      if (!existingFulfillment) return;
+
+      const nowIso = new Date().toISOString();
+      const nowDate = nowIso.split('T')[0];
+      const nextTracking =
+        trackingNumber?.trim() || existingFulfillment.trackingNumber || '';
+      const nextCarrierAr =
+        carrierAr?.trim() || existingFulfillment.carrierAr || 'سبل إكسبريس VIP';
+      const nextCarrierEn =
+        carrierEn?.trim() || existingFulfillment.carrierEn || 'SPL Express VIP';
+      const baseTimeline = buildOrderTimeline(newStatus, nowDate);
+      const nextTimeline = fulfillmentNote?.trim()
+        ? baseTimeline.map((ev) =>
+            ev.status === newStatus
+              ? {
+                  ...ev,
+                  descriptionAr: `${ev.descriptionAr} — ملاحظة التاجر: ${fulfillmentNote.trim()}`,
+                  descriptionEn: `${ev.descriptionEn} — Merchant Note: ${fulfillmentNote.trim()}`,
+                }
+              : ev
+          )
+        : baseTimeline;
+
+      const updatedFulfillment: SellerFulfillment = {
+        ...existingFulfillment,
+        status: newStatus,
+        trackingNumber: nextTracking,
+        carrierAr: nextCarrierAr,
+        carrierEn: nextCarrierEn,
+        timeline: nextTimeline,
+        updatedAt: nowIso,
+      };
+
+      if (!isDemoMode) {
+        try {
+          // Update ONLY sellerFulfillments/{orderId_sellerId} allowed seller fulfillment fields.
+          // Ordinary Seller NEVER updates global orders/{orderId}.
+          await updateDoc(doc(db, 'sellerFulfillments', fulfillmentId), {
+            status: newStatus,
+            trackingNumber: nextTracking,
+            carrierAr: nextCarrierAr,
+            carrierEn: nextCarrierEn,
+            timeline: nextTimeline,
+            updatedAt: nowIso,
+          });
+        } catch (e) {
+          logFirestoreFailure(e, OperationType.UPDATE, `sellerFulfillments/${fulfillmentId}`);
+          showToast(
+            lang === 'ar'
+              ? 'تعذر تحديث حالة شحنة المتجر في قاعدة البيانات'
+              : 'Failed to update seller shipment fulfillment status',
+            undefined,
+            'error'
+          );
+          return;
+        }
+      }
+
+      setSellerFulfillments((prev) => {
+        const exists = prev.some((f) => f.id === fulfillmentId);
+        if (exists) {
+          return prev.map((f) => (f.id === fulfillmentId ? updatedFulfillment : f));
+        }
+        return [updatedFulfillment, ...prev];
+      });
+
+      const sellerObj = sellers.find((s) => s.id === effectiveSellerId);
+      const sellerLabelAr = sellerObj?.nameAr || effectiveSellerId;
+      const sellerLabelEn = sellerObj?.nameEn || effectiveSellerId;
+
+      await addAuditLog(
+        `تحديث حالة شحنة المتجر (${sellerLabelAr}) للطلب #${targetOrder.orderNumber} إلى (${newStatus})`,
+        `Updated seller shipment (${sellerLabelEn}) for Order #${targetOrder.orderNumber} to ${newStatus}`,
+        'order',
+        orderId
+      );
+      showToast(
+        lang === 'ar'
+          ? `تم تحديث شحنة متجرك للطلب #${targetOrder.orderNumber}`
+          : `Store Shipment Updated for Order #${targetOrder.orderNumber}`,
+        nextTracking ? `${nextCarrierAr} · ${nextTracking}` : undefined,
+        'success'
+      );
+    },
+    [
+      ensureActiveSellerOrAdmin,
+      currentUser,
+      orders,
+      sellerFulfillments,
+      sellers,
+      isDemoMode,
+      addAuditLog,
+      lang,
+      showToast,
+    ]
+  );
+
   const updateOrderStatus = useCallback(
     async (
       orderId: string,
@@ -2802,22 +3036,35 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       fulfillmentNote?: string
     ) => {
       if (!ensureActiveSellerOrAdmin() || !currentUser) return;
-      const target = orders.find((o) => o.id === orderId);
-      if (!target) return;
 
+      // Multi-Vendor Isolation Guard:
+      // A Seller is NEVER allowed to mutate global Order status/tracking/carrier/timeline.
+      // Route any seller invocation strictly to their own isolated SellerFulfillment record.
       if (currentUser.role === 'seller') {
-        const belongsToSeller =
-          target.sellerIds?.includes(currentUser.sellerId || '') ||
-          target.items.some((item) => item.sellerId === currentUser.sellerId);
-        if (!belongsToSeller) {
+        if ((SELLER_FULFILLMENT_STATUSES as readonly string[]).includes(newStatus)) {
+          await updateSellerFulfillmentStatus(
+            orderId,
+            newStatus as SellerFulfillmentStatus,
+            trackingNumber,
+            carrierAr,
+            carrierEn,
+            fulfillmentNote,
+            currentUser.sellerId
+          );
+        } else {
           showToast(
-            lang === 'ar' ? 'لا يمكنك تحديث طلب لا يخص متجرك' : 'Cannot update order not belonging to your store',
+            lang === 'ar'
+              ? 'صلاحية التاجر تقتصر على تحديث حالة شحنة متجره فقط'
+              : 'Sellers may only update their own store shipment status',
             undefined,
             'error'
           );
-          return;
         }
+        return;
       }
+
+      const target = orders.find((o) => o.id === orderId);
+      if (!target) return;
 
       const nowIso = new Date().toISOString();
       const nowDate = nowIso.split('T')[0];
@@ -2830,8 +3077,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             ev.status === newStatus
               ? {
                   ...ev,
-                  descriptionAr: `${ev.descriptionAr} — ملاحظة التاجر: ${fulfillmentNote.trim()}`,
-                  descriptionEn: `${ev.descriptionEn} — Merchant Note: ${fulfillmentNote.trim()}`,
+                  descriptionAr: `${ev.descriptionAr} — ملاحظة الإدارة: ${fulfillmentNote.trim()}`,
+                  descriptionEn: `${ev.descriptionEn} — Admin Note: ${fulfillmentNote.trim()}`,
                 }
               : ev
           )
@@ -2848,7 +3095,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       };
       if (!isDemoMode) {
         try {
-          // Only update fulfillment fields permitted by Firestore seller/admin order rules
           const fulfillmentPayload: Record<string, unknown> = {
             status: newStatus,
             trackingNumber: nextTracking,
@@ -2870,8 +3116,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       }
       setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
       await addAuditLog(
-        `تغيير حالة الطلب #${target.orderNumber} إلى (${newStatus})`,
-        `Updated Order #${target.orderNumber} status to ${newStatus}`,
+        `تغيير حالة الطلب الكلية #${target.orderNumber} إلى (${newStatus})`,
+        `Updated Global Order #${target.orderNumber} status to ${newStatus}`,
         'order',
         orderId
       );
@@ -2883,7 +3129,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         'success'
       );
     },
-    [currentUser, isDemoMode, orders, addAuditLog, lang, showToast]
+    [
+      ensureActiveSellerOrAdmin,
+      currentUser,
+      isDemoMode,
+      orders,
+      updateSellerFulfillmentStatus,
+      addAuditLog,
+      lang,
+      showToast,
+    ]
   );
 
   const saveCoupon = useCallback(
@@ -4966,6 +5221,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     sellers,
     coupons,
     orders,
+    sellerFulfillments,
     reviews,
     questions,
     users,
@@ -5037,6 +5293,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     deleteProduct,
     bulkUpdateProductStatus,
     updateProductStock,
+    updateSellerFulfillmentStatus,
     updateOrderStatus,
     saveCoupon,
     toggleCouponStatus,

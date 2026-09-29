@@ -168,17 +168,79 @@ service cloud.firestore {
         );
     }
 
+    // Helper for Seller Fulfillment Validation:
+    function isValidSellerFulfillmentStatus(status) {
+      return status in [
+        'confirmed',
+        'preparing',
+        'shipped',
+        'out_for_delivery',
+        'delivered'
+      ];
+    }
+
+    function isValidSellerFulfillmentDoc(data, fulfillmentId) {
+      return data.keys().hasOnly([
+          'id',
+          'orderId',
+          'sellerId',
+          'customerId',
+          'sellerItemProductIds',
+          'status',
+          'trackingNumber',
+          'carrierAr',
+          'carrierEn',
+          'timeline',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id == fulfillmentId
+        && isValidString(data.orderId, 2, 100)
+        && isValidString(data.sellerId, 2, 100)
+        && fulfillmentId == data.orderId + '_' + data.sellerId
+        && isValidString(data.customerId, 2, 128)
+        && data.sellerItemProductIds is list
+        && data.sellerItemProductIds.size() >= 1
+        && data.sellerItemProductIds.size() <= 50
+        && data.sellerItemProductIds[0] is string
+        && isValidSellerFulfillmentStatus(data.status)
+        && data.trackingNumber is string
+        && data.trackingNumber.size() <= 100
+        && isValidString(data.carrierAr, 2, 120)
+        && isValidString(data.carrierEn, 2, 120)
+        && data.timeline is list
+        && isValidString(data.createdAt, 4, 60)
+        && isValidString(data.updatedAt, 4, 60);
+    }
+
     // Helper for Verified Purchase Review Integrity:
-    // Ensures the referenced order exists, belongs to request.auth.uid, has status == 'delivered',
-    // AND its immutable `productIds` list explicitly contains the reviewed `productId`.
+    // Ensures the referenced order exists, belongs to request.auth.uid, is not cancelled,
+    // its immutable `productIds` list explicitly contains the reviewed `productId`,
+    // AND the seller-specific fulfillment (`sellerFulfillments/{orderId}_{sellerId}`) is 'delivered'
+    // (or falls back to order.status == 'delivered' only for legacy single-vendor orders without a fulfillment doc).
     function isDeliveredOrderForProduct(orderId, productId) {
       return orderId is string
         && orderId.size() > 0
         && isValidId(orderId)
+        && isValidId(productId)
         && exists(/databases/$(database)/documents/orders/$(orderId))
         && get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid
-        && get(/databases/$(database)/documents/orders/$(orderId)).data.status == 'delivered'
-        && productId in get(/databases/$(database)/documents/orders/$(orderId)).data.get('productIds', []);
+        && get(/databases/$(database)/documents/orders/$(orderId)).data.status != 'cancelled'
+        && productId in get(/databases/$(database)/documents/orders/$(orderId)).data.get('productIds', [])
+        && exists(/databases/$(database)/documents/products/$(productId))
+        && (
+          (
+            exists(/databases/$(database)/documents/sellerFulfillments/$(orderId + '_' + get(/databases/$(database)/documents/products/$(productId)).data.sellerId))
+            && get(/databases/$(database)/documents/sellerFulfillments/$(orderId + '_' + get(/databases/$(database)/documents/products/$(productId)).data.sellerId)).data.customerId == request.auth.uid
+            && get(/databases/$(database)/documents/sellerFulfillments/$(orderId + '_' + get(/databases/$(database)/documents/products/$(productId)).data.sellerId)).data.status == 'delivered'
+            && productId in get(/databases/$(database)/documents/sellerFulfillments/$(orderId + '_' + get(/databases/$(database)/documents/products/$(productId)).data.sellerId)).data.get('sellerItemProductIds', [])
+          )
+          || (
+            !exists(/databases/$(database)/documents/sellerFulfillments/$(orderId + '_' + get(/databases/$(database)/documents/products/$(productId)).data.sellerId))
+            && get(/databases/$(database)/documents/orders/$(orderId)).data.get('sellerIds', []).size() <= 1
+            && get(/databases/$(database)/documents/orders/$(orderId)).data.status == 'delivered'
+          )
+        );
     }
 
     // 1. PRODUCTS: Public read for active/out_of_stock;
@@ -289,7 +351,11 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            request.resource.data.applicantUserId == request.auth.uid
+            (
+              !exists(/databases/$(database)/documents/settings/publicPlatformSettings)
+              || get(/databases/$(database)/documents/settings/publicPlatformSettings).data.sellerApplicationsEnabled == true
+            )
+            && request.resource.data.applicantUserId == request.auth.uid
             && request.resource.data.status == 'pending'
             && request.resource.data.verifiedBadge == false
             && request.resource.data.rating == 0
@@ -426,16 +492,24 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 4. ORDERS: Customer creates/reads own orders & updates ONLY cancellation/return fields;
-    // Seller reads/updates ONLY fulfillment fields on orders containing their sellerId;
+    // 4. ORDERS: Customer creates/reads own orders & updates ONLY cancellation/return request fields;
+    // Seller may read orders containing their sellerId, but may NEVER update global Order status, tracking, carrier, or timeline
+    // (Sellers must update their isolated `/sellerFulfillments/{orderId_sellerId}` record instead).
     // `productIds` is immutable and cannot be modified by customers or sellers; Admin accesses all.
     match /orders/{orderId} {
       allow create: if isSignedIn()
         && isValidId(orderId)
+        && (
+          isAdmin()
+          || !exists(/databases/$(database)/documents/settings/publicPlatformSettings)
+          || get(/databases/$(database)/documents/settings/publicPlatformSettings).data.checkoutEnabled == true
+        )
         && request.resource.data.customerId == request.auth.uid
         && isValidString(request.resource.data.orderNumber, 3, 60)
         && isNonNegativeNumber(request.resource.data.total)
         && isNonNegativeNumber(request.resource.data.vatAmount)
+        && request.resource.data.status in ['placed', 'confirmed']
+        && !('returnRequest' in request.resource.data)
         && request.resource.data.productIds is list
         && request.resource.data.productIds.size() >= 1
         && request.resource.data.productIds.size() <= 50
@@ -454,6 +528,7 @@ service cloud.firestore {
           || (
             resource.data.customerId == request.auth.uid
             && request.resource.data.get('productIds', []) == resource.data.get('productIds', [])
+            && request.resource.data.get('sellerIds', []) == resource.data.get('sellerIds', [])
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'status',
               'cancelReason',
@@ -462,11 +537,56 @@ service cloud.firestore {
               'updatedAt'
             ])
             && request.resource.data.status in ['cancelled', 'return_requested']
+            && (
+              request.resource.data.status != 'return_requested'
+              || (
+                request.resource.data.returnRequest is map
+                && request.resource.data.returnRequest.status == 'pending'
+                && request.resource.data.returnRequest.refundStatus == 'none'
+                && !('sellerRecommendation' in request.resource.data.returnRequest)
+                && !('adminNote' in request.resource.data.returnRequest)
+                && !('refundAmount' in request.resource.data.returnRequest)
+              )
+            )
           )
+        );
+
+      allow delete: if false;
+    }
+
+    // 4B. SELLER FULFILLMENTS (MULTI-VENDOR ORDER FULFILLMENT ISOLATION):
+    // Document ID: `{orderId}_{sellerId}`
+    // - Seller may read/update ONLY fulfillment records where `resource.data.sellerId == currentUserData().sellerId`.
+    // - Seller may modify ONLY `status`, `trackingNumber`, `carrierAr`, `carrierEn`, `timeline`, `updatedAt`.
+    // - Seller may NEVER modify `orderId`, `sellerId`, `customerId`, `sellerItemProductIds`, or financial fields.
+    // - Customer may read fulfillment records ONLY where `resource.data.customerId == request.auth.uid`.
+    // - Trusted Creation Boundary: Authoritative `sellerFulfillments` are provisioned by Admin / trusted backend
+    //   alongside Order creation so buyers/sellers cannot fabricate arbitrary fulfillment records.
+    match /sellerFulfillments/{fulfillmentId} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || resource.data.customerId == request.auth.uid
+        || (isSeller() && resource.data.sellerId == currentUserData().sellerId)
+      );
+
+      allow create: if isValidId(fulfillmentId)
+        && isAdmin()
+        && isValidSellerFulfillmentDoc(request.resource.data, fulfillmentId);
+
+      allow update: if isSignedIn()
+        && isValidId(fulfillmentId)
+        && isValidSellerFulfillmentDoc(request.resource.data, fulfillmentId)
+        && (
+          isAdmin()
           || (
-            isSeller()
-            && currentUserData().sellerId in resource.data.get('sellerIds', [])
-            && request.resource.data.get('productIds', []) == resource.data.get('productIds', [])
+            ownsSellerAccount(resource.data.sellerId)
+            && resource.data.sellerId == currentUserData().sellerId
+            && request.resource.data.id == resource.data.id
+            && request.resource.data.orderId == resource.data.orderId
+            && request.resource.data.sellerId == resource.data.sellerId
+            && request.resource.data.customerId == resource.data.customerId
+            && request.resource.data.sellerItemProductIds == resource.data.sellerItemProductIds
+            && request.resource.data.createdAt == resource.data.createdAt
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'status',
               'trackingNumber',
@@ -475,17 +595,11 @@ service cloud.firestore {
               'timeline',
               'updatedAt'
             ])
-            && request.resource.data.status in [
-              'confirmed',
-              'preparing',
-              'shipped',
-              'out_for_delivery',
-              'delivered'
-            ]
+            && isValidSellerFulfillmentStatus(request.resource.data.status)
           )
         );
 
-      allow delete: if false;
+      allow delete: if isValidId(fulfillmentId) && isAdmin();
     }
 
     // 5. COUPONS: Public reads active coupons; Seller manages own coupon settings; Admin manages all;
@@ -534,14 +648,21 @@ service cloud.firestore {
       allow delete: if isValidId(couponId) && (isAdmin() || ownsSellerAccount(resource.data.sellerId));
     }
 
-    // 6. REVIEWS: Public read; Authenticated user creates own review;
-    // verifiedPurchase == true is strictly validated against a real DELIVERED order owned by request.auth.uid
-    // whose immutable `productIds` array contains `request.resource.data.productId`.
+    // 6. REVIEWS: Public reads approved reviews; Authenticated user creates own review;
+    // verifiedPurchase == true is strictly validated against a real DELIVERED seller fulfillment / order owned by request.auth.uid
+    // whose immutable item list contains `request.resource.data.productId`.
     match /reviews/{reviewId} {
-      allow read: if true;
+      allow read: if resource.data.status == 'approved'
+        || isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
 
       allow create: if isSignedIn()
         && isValidId(reviewId)
+        && (
+          isAdmin()
+          || !exists(/databases/$(database)/documents/settings/publicPlatformSettings)
+          || get(/databases/$(database)/documents/settings/publicPlatformSettings).data.customerReviewsEnabled == true
+        )
         && request.resource.data.userId == request.auth.uid
         && isValidString(request.resource.data.productId, 1, 100)
         && request.resource.data.rating is number
@@ -550,7 +671,19 @@ service cloud.firestore {
         && isValidString(request.resource.data.comment, 2, 1500)
         && request.resource.data.verifiedPurchase is bool
         && (
-          request.resource.data.verifiedPurchase == false
+          isAdmin()
+          || (
+            request.resource.data.status == 'approved'
+            && !('sellerReplyAr' in request.resource.data)
+            && !('sellerReplyEn' in request.resource.data)
+            && !('sellerReplyAt' in request.resource.data)
+          )
+        )
+        && (
+          (
+            request.resource.data.verifiedPurchase == false
+            && !('verifiedOrderId' in request.resource.data)
+          )
           || isAdmin()
           || isDeliveredOrderForProduct(
             request.resource.data.get('verifiedOrderId', ''),
@@ -563,10 +696,25 @@ service cloud.firestore {
         || (
           isSignedIn()
           && resource.data.userId == request.auth.uid
+          && resource.data.status != 'hidden'
           && request.resource.data.userId == resource.data.userId
           && request.resource.data.productId == resource.data.productId
           && request.resource.data.verifiedPurchase == resource.data.verifiedPurchase
           && request.resource.data.get('verifiedOrderId', null) == resource.data.get('verifiedOrderId', null)
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.get('sellerReplyAr', null) == resource.data.get('sellerReplyAr', null)
+          && request.resource.data.get('sellerReplyEn', null) == resource.data.get('sellerReplyEn', null)
+          && request.resource.data.get('sellerReplyAt', null) == resource.data.get('sellerReplyAt', null)
+          && request.resource.data.get('helpfulCount', 0) == resource.data.get('helpfulCount', 0)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'rating',
+            'title',
+            'comment'
+          ])
+          && request.resource.data.rating is number
+          && request.resource.data.rating >= 1
+          && request.resource.data.rating <= 5
+          && isValidString(request.resource.data.comment, 2, 1500)
         )
         || (
           ownsProduct(resource.data.productId)
@@ -590,7 +738,7 @@ service cloud.firestore {
       allow delete: if isValidId(reviewId) && isAdmin();
     }
 
-    // 7. PRODUCT QUESTIONS: Public read; Authenticated user asks question;
+    // 7. PRODUCT QUESTIONS: Public read; Authenticated user asks question (without pre-populating seller answer fields);
     // Seller answers ONLY questions for products owned by their sellerId and modifies ONLY answer fields; Admin manages all.
     match /questions/{questionId} {
       allow read: if true;
@@ -598,7 +746,24 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && isValidId(questionId)
         && isValidString(request.resource.data.productId, 1, 100)
-        && isValidString(request.resource.data.questionAr, 2, 800);
+        && isValidString(request.resource.data.questionAr, 2, 800)
+        && (
+          isAdmin()
+          || (
+            (
+              !exists(/databases/$(database)/documents/settings/publicPlatformSettings)
+              || get(/databases/$(database)/documents/settings/publicPlatformSettings).data.productQuestionsEnabled == true
+            )
+            && exists(/databases/$(database)/documents/products/$(request.resource.data.productId))
+            && isValidString(request.resource.data.userName, 1, 150)
+            && !('answerAr' in request.resource.data)
+            && !('answerEn' in request.resource.data)
+            && !('answeredByAr' in request.resource.data)
+            && !('answeredByEn' in request.resource.data)
+            && !('answeredAt' in request.resource.data)
+            && (!('userId' in request.resource.data) || request.resource.data.userId == request.auth.uid)
+          )
+        );
 
       allow update: if isValidId(questionId) && (
         isAdmin()

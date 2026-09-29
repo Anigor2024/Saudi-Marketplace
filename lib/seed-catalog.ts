@@ -17,6 +17,8 @@ import {
   PrivatePlatformSettings,
   OrderTimelineEvent,
   OrderStatus,
+  SellerFulfillment,
+  SellerFulfillmentStatus,
 } from './types';
 
 export const INITIAL_HOMEPAGE_CONFIG: HomepageConfig = {
@@ -1833,15 +1835,75 @@ export const INITIAL_ORDERS: Order[] = [
     shippingFee: 0,
     vatAmount: 1360.43,
     total: 10430,
-    status: 'delivered',
+    status: 'preparing',
     trackingNumber: 'SPL-33019284SA',
     carrierAr: 'سبل إكسبريس VIP',
     carrierEn: 'SPL Express VIP',
-    timeline: buildOrderTimeline('delivered', '2026-05-18'),
+    timeline: buildOrderTimeline('preparing', '2026-05-18'),
     createdAt: '2026-05-14T12:00:00Z',
     updatedAt: '2026-05-18T16:30:00Z',
   },
 ];
+
+function mapOrderToSellerFulfillmentStatus(status: OrderStatus): SellerFulfillmentStatus {
+  if (status === 'delivered' || status === 'return_requested' || status === 'returned') {
+    return 'delivered';
+  }
+  if (status === 'out_for_delivery') return 'out_for_delivery';
+  if (status === 'shipped') return 'shipped';
+  if (status === 'preparing') return 'preparing';
+  return 'confirmed';
+}
+
+export function buildSellerFulfillmentsForOrder(order: Order): SellerFulfillment[] {
+  const uniqueSellers =
+    order.sellerIds && order.sellerIds.length > 0
+      ? order.sellerIds
+      : Array.from(new Set(order.items.map((item) => item.sellerId)));
+
+  const baseDate = (order.updatedAt || order.createdAt || '2026-09-27').split('T')[0];
+
+  return uniqueSellers.map((sellerId, idx) => {
+    const sellerItems = order.items.filter((item) => item.sellerId === sellerId);
+    const sellerItemProductIds = Array.from(new Set(sellerItems.map((item) => item.productId)));
+
+    // For multi-vendor order ord-97610, seller-3 is delivered while seller-5 is still preparing
+    let fulfillmentStatus: SellerFulfillmentStatus = mapOrderToSellerFulfillmentStatus(order.status);
+    if (order.id === 'ord-97610') {
+      fulfillmentStatus = sellerId === 'seller-3' ? 'delivered' : 'preparing';
+    }
+
+    const baseTracking = order.trackingNumber || `SPL-${order.orderNumber.replace(/\D/g, '')}SA`;
+    const sellerTracking =
+      idx === 0
+        ? baseTracking
+        : baseTracking.replace(/SA$/, `-${idx + 1}SA`);
+    const sellerCarrierAr =
+      idx === 0 ? order.carrierAr || 'سبل إكسبريس VIP' : 'أرامكس بريميوم';
+    const sellerCarrierEn =
+      idx === 0 ? order.carrierEn || 'SPL Express VIP' : 'Aramex Premium';
+
+    return {
+      id: `${order.id}_${sellerId}`,
+      orderId: order.id,
+      sellerId,
+      customerId: order.customerId,
+      sellerItemProductIds:
+        sellerItemProductIds.length > 0 ? sellerItemProductIds : [...order.productIds],
+      status: fulfillmentStatus,
+      trackingNumber: sellerTracking,
+      carrierAr: sellerCarrierAr,
+      carrierEn: sellerCarrierEn,
+      timeline: buildOrderTimeline(fulfillmentStatus, baseDate),
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt || order.createdAt,
+    };
+  });
+}
+
+export const INITIAL_SELLER_FULFILLMENTS: SellerFulfillment[] = INITIAL_ORDERS.flatMap((order) =>
+  buildSellerFulfillmentsForOrder(order)
+);
 
 export const INITIAL_REVIEWS: Review[] = [
   {
@@ -1889,7 +1951,7 @@ export const INITIAL_REVIEWS: Review[] = [
     title: 'نسخة الشرق الأوسط الرسمية وتوصيل سريع للخبر',
     comment:
       'الجهاز أصلي بضمان حاسبات العرب سنتين، واللون التيتانيوم الصحراوي فخم جداً. أشكر متجر آفاق التقنية على سرعة التجهيز والتغليف المحكم.',
-    verifiedPurchase: true,
+    verifiedPurchase: false,
     helpfulCount: 29,
     createdAt: '2026-09-24',
     status: 'approved',
@@ -1905,7 +1967,7 @@ export const INITIAL_REVIEWS: Review[] = [
     title: 'حولت ركن القهوة في منزلي إلى كافيه مختص حقيقي',
     comment:
       'الطحن والكبس والتبخير الأوتوماتيكي دقيق جداً، والشاشة اللمسية سهلة الاستخدام. متجر رواق القهوة أرفق معها محصول بن إثيوبي مختص هدية.',
-    verifiedPurchase: true,
+    verifiedPurchase: false,
     helpfulCount: 41,
     createdAt: '2026-09-19',
     status: 'approved',
@@ -1975,7 +2037,7 @@ export const INITIAL_REVIEWS: Review[] = [
     title: 'عزل الضجيج ممتاز جداً في رحلات الطيران الطويلة',
     comment:
       'السماعة مريحة جداً على الأذن لساعات طويلة وجودة الميكروفون في الاجتماعات واضحة، كنت أتمنى فقط لو كانت تطوى بالكامل مثل الجيل السابق.',
-    verifiedPurchase: true,
+    verifiedPurchase: false,
     helpfulCount: 15,
     createdAt: '2026-09-26',
     status: 'approved',

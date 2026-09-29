@@ -353,6 +353,96 @@ export interface Order {
   updatedAt: string;
 }
 
+export type SellerFulfillmentStatus =
+  | 'confirmed'
+  | 'preparing'
+  | 'shipped'
+  | 'out_for_delivery'
+  | 'delivered';
+
+export const SELLER_FULFILLMENT_STATUSES: readonly SellerFulfillmentStatus[] = [
+  'confirmed',
+  'preparing',
+  'shipped',
+  'out_for_delivery',
+  'delivered',
+] as const;
+
+export interface SellerFulfillment {
+  id: string; // `${orderId}_${sellerId}`
+  orderId: string;
+  sellerId: string;
+  customerId: string;
+  sellerItemProductIds: string[];
+  status: SellerFulfillmentStatus;
+  trackingNumber: string;
+  carrierAr: string;
+  carrierEn: string;
+  timeline: OrderTimelineEvent[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Derives a read-only aggregate OrderStatus from seller-specific fulfillment states.
+ * Never pretends a multi-vendor Order is 'delivered' until ALL seller shipments are 'delivered'.
+ * Preserves order-level terminal/post-delivery states ('cancelled', 'return_requested', 'returned').
+ */
+export function deriveAggregateOrderStatus(
+  order: Order,
+  fulfillments: SellerFulfillment[]
+): OrderStatus {
+  if (
+    order.status === 'cancelled' ||
+    order.status === 'return_requested' ||
+    order.status === 'returned'
+  ) {
+    return order.status;
+  }
+
+  const orderFulfillments = fulfillments.filter((f) => f.orderId === order.id);
+  const expectedSellerIds =
+    order.sellerIds && order.sellerIds.length > 0
+      ? order.sellerIds
+      : Array.from(new Set(order.items.map((i) => i.sellerId)));
+
+  if (orderFulfillments.length === 0) {
+    // If multi-vendor order has no fulfillment records yet, do not falsely claim 'delivered'
+    if (expectedSellerIds.length > 1 && order.status === 'delivered') {
+      return 'confirmed';
+    }
+    return order.status;
+  }
+
+  // Ensure every expected seller in the order is accounted for before claiming full progression
+  const statuses: SellerFulfillmentStatus[] = expectedSellerIds.map((sid) => {
+    const found = orderFulfillments.find((f) => f.sellerId === sid);
+    return found ? found.status : 'confirmed';
+  });
+
+  if (statuses.every((s) => s === 'delivered')) {
+    return 'delivered';
+  }
+  if (statuses.every((s) => s === 'out_for_delivery' || s === 'delivered')) {
+    return 'out_for_delivery';
+  }
+  if (statuses.every((s) => s === 'shipped' || s === 'out_for_delivery' || s === 'delivered')) {
+    return 'shipped';
+  }
+  if (
+    statuses.some(
+      (s) =>
+        s === 'preparing' ||
+        s === 'shipped' ||
+        s === 'out_for_delivery' ||
+        s === 'delivered'
+    )
+  ) {
+    return 'preparing';
+  }
+  return order.status === 'placed' ? 'placed' : 'confirmed';
+}
+
 export interface Review {
   id: string;
   productId: string;

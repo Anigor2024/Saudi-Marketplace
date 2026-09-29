@@ -64,6 +64,7 @@ export default function SellerCenter() {
     products,
     categories,
     orders,
+    sellerFulfillments,
     coupons,
     questions,
     reviews,
@@ -1074,6 +1075,15 @@ export default function SellerCenter() {
                         const mySubtotal = ord.items
                           .filter((i) => i.sellerId === activeSeller.id)
                           .reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+                        const myFulfillment = sellerFulfillments.find(
+                          (f) => f.orderId === ord.id && f.sellerId === activeSeller.id
+                        );
+                        const displayStatus =
+                          ord.status === 'cancelled' ||
+                          ord.status === 'return_requested' ||
+                          ord.status === 'returned'
+                            ? ord.status
+                            : myFulfillment?.status || ord.status;
                         return (
                           <div
                             key={ord.id}
@@ -1086,7 +1096,7 @@ export default function SellerCenter() {
                                   #{ord.orderNumber}
                                 </span>
                                 <span className="px-2 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] text-[10px] font-bold uppercase">
-                                  {ord.status}
+                                  {displayStatus}
                                 </span>
                               </div>
                               <div className="text-[11px] text-[#57534E] mt-0.5">

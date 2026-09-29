@@ -21,7 +21,14 @@ import {
   CreditCard,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
-import { Order, OrderStatus, Seller } from '@/lib/types';
+import {
+  Order,
+  OrderStatus,
+  Seller,
+  SellerFulfillment,
+  SellerFulfillmentStatus,
+} from '@/lib/types';
+import { buildSellerFulfillmentsForOrder } from '@/lib/seed-catalog';
 
 interface SellerOrdersProps {
   seller: Seller;
@@ -41,7 +48,35 @@ export default function SellerOrdersAndReturns({
   sellerOrders,
   mode,
 }: SellerOrdersProps) {
-  const { lang, t, formatPrice, tickets, updateOrderStatus, respondToReturnRequest } = useMarketplace();
+  const {
+    lang,
+    t,
+    formatPrice,
+    tickets,
+    sellerFulfillments,
+    updateSellerFulfillmentStatus,
+    respondToReturnRequest,
+  } = useMarketplace();
+
+  const getSellerFulfillment = (order: Order): SellerFulfillment | undefined => {
+    const live = sellerFulfillments.find(
+      (f) => f.orderId === order.id && f.sellerId === seller.id
+    );
+    if (live) return live;
+    return buildSellerFulfillmentsForOrder(order).find((f) => f.sellerId === seller.id);
+  };
+
+  const getEffectiveSellerOrderStatus = (order: Order): OrderStatus => {
+    if (
+      order.status === 'cancelled' ||
+      order.status === 'return_requested' ||
+      order.status === 'returned'
+    ) {
+      return order.status;
+    }
+    const sf = getSellerFulfillment(order);
+    return sf ? sf.status : order.status;
+  };
 
   const [statusFilter, setStatusFilter] = useState<'all' | OrderStatus>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -87,27 +122,33 @@ export default function SellerOrdersAndReturns({
       cancelled: 0,
     };
     sellerOrders.forEach((o) => {
-      counts[o.status] = (counts[o.status] || 0) + 1;
+      const st = getEffectiveSellerOrderStatus(o);
+      counts[st] = (counts[st] || 0) + 1;
     });
     return counts;
-  }, [sellerOrders]);
+  }, [sellerOrders, sellerFulfillments, seller.id]);
 
   const displayedOrders = useMemo(() => {
     const base = mode === 'returns' ? returnOrders : sellerOrders;
     return base.filter((o) => {
-      if (mode === 'orders' && statusFilter !== 'all' && o.status !== statusFilter) return false;
+      const effectiveStatus = getEffectiveSellerOrderStatus(o);
+      const sf = getSellerFulfillment(o);
+      if (mode === 'orders' && statusFilter !== 'all' && effectiveStatus !== statusFilter)
+        return false;
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchNum = o.orderNumber.toLowerCase().includes(q);
         const matchCust = o.customerName.toLowerCase().includes(q);
         const matchCity =
           o.address.cityAr.toLowerCase().includes(q) || o.address.cityEn.toLowerCase().includes(q);
-        const matchTrack = (o.trackingNumber || '').toLowerCase().includes(q);
+        const matchTrack = (sf?.trackingNumber || o.trackingNumber || '')
+          .toLowerCase()
+          .includes(q);
         if (!matchNum && !matchCust && !matchCity && !matchTrack) return false;
       }
       return true;
     });
-  }, [mode, sellerOrders, returnOrders, statusFilter, searchQuery]);
+  }, [mode, sellerOrders, returnOrders, statusFilter, searchQuery, sellerFulfillments, seller.id]);
 
   const getOrderStatusBadge = (status: OrderStatus) => {
     const map: Record<
@@ -163,22 +204,24 @@ export default function SellerOrdersAndReturns({
     return map[status] || map.placed;
   };
 
-  const handleAdvanceStatus = async (order: Order, nextStatus: OrderStatus) => {
+  const handleAdvanceStatus = async (order: Order, nextStatus: SellerFulfillmentStatus) => {
+    const sf = getSellerFulfillment(order);
     const carrierIdx = carrierInputs[order.id] ?? 0;
     const chosenCarrier = SAUDI_CARRIERS[carrierIdx] || SAUDI_CARRIERS[0];
     const tracking =
       trackingInputs[order.id]?.trim() ||
-      order.trackingNumber ||
+      sf?.trackingNumber ||
       `${chosenCarrier.prefix}-${Math.floor(10000000 + Math.random() * 89999999)}SA`;
     const note = noteInputs[order.id]?.trim() || '';
 
-    await updateOrderStatus(
+    await updateSellerFulfillmentStatus(
       order.id,
       nextStatus,
       tracking,
-      order.carrierAr && carrierInputs[order.id] === undefined ? order.carrierAr : chosenCarrier.ar,
-      order.carrierEn && carrierInputs[order.id] === undefined ? order.carrierEn : chosenCarrier.en,
-      note
+      sf?.carrierAr && carrierInputs[order.id] === undefined ? sf.carrierAr : chosenCarrier.ar,
+      sf?.carrierEn && carrierInputs[order.id] === undefined ? sf.carrierEn : chosenCarrier.en,
+      note,
+      seller.id
     );
     setNoteInputs((prev) => ({ ...prev, [order.id]: '' }));
   };
@@ -313,7 +356,10 @@ export default function SellerOrdersAndReturns({
             const sellerNetPayout = Number((sellerGrossSubtotal - sellerCommission).toFixed(2));
             const sellerVatPortion = Number(((sellerGrossSubtotal * 15) / 115).toFixed(2));
 
-            const badge = getOrderStatusBadge(order.status);
+            // Seller-specific fulfillment record & isolated status
+            const sellerFulfillment = getSellerFulfillment(order);
+            const effectiveStatus = getEffectiveSellerOrderStatus(order);
+            const badge = getOrderStatusBadge(effectiveStatus);
             const isExpanded = expandedOrderId === order.id;
 
             return (
@@ -670,14 +716,44 @@ export default function SellerOrdersAndReturns({
                           </div>
                         ) : null}
 
-                        {/* Standard Fulfillment Console */}
+                        {/* Standard Seller-Isolated Fulfillment Console */}
                         <div className="bg-white rounded-xl border border-[#E6E0D6] p-5 space-y-4">
-                          <h4 className="text-xs font-bold text-[#141413] flex items-center gap-2">
-                            <Truck className="w-4 h-4 text-[#0B4F3F]" />
-                            <span>
-                              {t('وحدة التحكم بالتجهيز والشحن', 'Fulfillment & Carrier Dispatch Console')}
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-xs font-bold text-[#141413] flex items-center gap-2">
+                              <Truck className="w-4 h-4 text-[#0B4F3F]" />
+                              <span>
+                                {t(
+                                  'وحدة التحكم بشحنة متجرك (معزولة لكل تاجر)',
+                                  'Your Store Shipment Console (Vendor-Isolated)'
+                                )}
+                              </span>
+                            </h4>
+                            <span className="px-2 py-0.5 rounded bg-[#EBF3F0] text-[#0B4F3F] text-[10px] font-mono font-bold">
+                              {sellerFulfillment?.id || `${order.id}_${seller.id}`}
                             </span>
-                          </h4>
+                          </div>
+
+                          {/* Current Seller Shipment Summary */}
+                          <div className="p-3 rounded-xl bg-[#FAF8F5] border border-[#E6E0D6] grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-[10px] text-[#8C857B] block">
+                                {t('الناقل المعتمد لشحنة متجرك:', 'Your Store Carrier:')}
+                              </span>
+                              <span className="font-bold text-[#141413]">
+                                {lang === 'ar'
+                                  ? sellerFulfillment?.carrierAr || 'سبل إكسبريس VIP'
+                                  : sellerFulfillment?.carrierEn || 'SPL Express VIP'}
+                              </span>
+                            </div>
+                            <div className="text-end">
+                              <span className="text-[10px] text-[#8C857B] block">
+                                {t('بوليصة شحنة متجرك:', 'Your Store Waybill:')}
+                              </span>
+                              <span className="font-mono font-bold text-[#0B4F3F]">
+                                {sellerFulfillment?.trackingNumber || '—'}
+                              </span>
+                            </div>
+                          </div>
 
                           <div className="space-y-3">
                             <div>
@@ -704,12 +780,16 @@ export default function SellerOrdersAndReturns({
 
                             <div>
                               <label className="block text-[11px] font-bold text-[#57534E] mb-1">
-                                {t('رقم بوليصة التتبع (Waybill / Tracking #)', 'Tracking / Waybill Number')}
+                                {t('رقم بوليصة التتبع الخاصة بمتجرك', 'Your Store Tracking / Waybill #')}
                               </label>
                               <div className="flex gap-2">
                                 <input
                                   type="text"
-                                  value={trackingInputs[order.id] ?? order.trackingNumber ?? ''}
+                                  value={
+                                    trackingInputs[order.id] ??
+                                    sellerFulfillment?.trackingNumber ??
+                                    ''
+                                  }
                                   onChange={(e) =>
                                     setTrackingInputs((prev) => ({
                                       ...prev,
@@ -741,8 +821,8 @@ export default function SellerOrdersAndReturns({
                             <div>
                               <label className="block text-[11px] font-bold text-[#57534E] mb-1">
                                 {t(
-                                  'ملاحظة التجهيز والتغليف (تظهر في سجل التتبع)',
-                                  'Fulfillment Note (Added to Order Timeline)'
+                                  'ملاحظة التجهيز والتغليف (تظهر في سجل شحنة متجرك)',
+                                  'Fulfillment Note (Added to Your Shipment Timeline)'
                                 )}
                               </label>
                               <input
@@ -762,24 +842,27 @@ export default function SellerOrdersAndReturns({
                               />
                             </div>
 
-                            {/* Progressive Action Buttons */}
+                            {/* Progressive Action Buttons (Strictly Scoped to SellerFulfillment) */}
                             <div className="pt-2 space-y-2">
                               <span className="block text-[11px] font-bold text-[#141413]">
-                                {t('ترقية حالة الطلب الفورية:', 'Advance Order Stage:')}
+                                {t(
+                                  'ترقية حالة شحنة متجرك الفورية:',
+                                  'Advance Your Store Shipment Stage:'
+                                )}
                               </span>
                               <div className="grid grid-cols-2 gap-2">
                                 <button
                                   type="button"
                                   onClick={() => handleAdvanceStatus(order, 'confirmed')}
-                                  disabled={order.status === 'confirmed'}
+                                  disabled={effectiveStatus === 'confirmed'}
                                   className="py-2 px-3 rounded-xl bg-[#FAF8F5] hover:bg-[#EBF3F0] border border-[#E6E0D6] text-[11px] font-bold text-[#0B4F3F] disabled:opacity-40"
                                 >
-                                  1. {t('تأكيد الطلب', 'Confirm Order')}
+                                  1. {t('تأكيد الشحنة', 'Confirm Shipment')}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleAdvanceStatus(order, 'preparing')}
-                                  disabled={order.status === 'preparing'}
+                                  disabled={effectiveStatus === 'preparing'}
                                   className="py-2 px-3 rounded-xl bg-[#FAF8F5] hover:bg-[#EBF3F0] border border-[#E6E0D6] text-[11px] font-bold text-[#0B4F3F] disabled:opacity-40"
                                 >
                                   2. {t('بدء التجهيز والتغليف', 'Start Preparing')}
@@ -787,7 +870,7 @@ export default function SellerOrdersAndReturns({
                                 <button
                                   type="button"
                                   onClick={() => handleAdvanceStatus(order, 'shipped')}
-                                  disabled={order.status === 'shipped'}
+                                  disabled={effectiveStatus === 'shipped'}
                                   className="py-2 px-3 rounded-xl bg-[#0B4F3F] hover:bg-[#083B2F] text-white text-[11px] font-bold disabled:opacity-40"
                                 >
                                   3. {t('تسليم للناقل (شُحنت)', 'Mark Shipped')}
@@ -795,7 +878,7 @@ export default function SellerOrdersAndReturns({
                                 <button
                                   type="button"
                                   onClick={() => handleAdvanceStatus(order, 'out_for_delivery')}
-                                  disabled={order.status === 'out_for_delivery'}
+                                  disabled={effectiveStatus === 'out_for_delivery'}
                                   className="py-2 px-3 rounded-xl bg-[#FAF8F5] hover:bg-[#EBF3F0] border border-[#E6E0D6] text-[11px] font-bold text-[#0B4F3F] disabled:opacity-40"
                                 >
                                   4. {t('خرج للتوصيل', 'Out for Delivery')}
@@ -804,12 +887,46 @@ export default function SellerOrdersAndReturns({
                               <button
                                 type="button"
                                 onClick={() => handleAdvanceStatus(order, 'delivered')}
-                                disabled={order.status === 'delivered'}
+                                disabled={effectiveStatus === 'delivered'}
                                 className="w-full py-2.5 px-4 rounded-xl bg-[#1E6B47] hover:bg-[#165236] text-white text-xs font-bold disabled:opacity-40"
                               >
-                                5. {t('تأكيد التسليم النهائي للعميل ✓', 'Confirm Final Delivery ✓')}
+                                5. {t('تأكيد تسليم شحنة متجرك للعميل ✓', 'Confirm Store Shipment Delivery ✓')}
                               </button>
                             </div>
+
+                            {/* Seller-Specific Shipment Timeline */}
+                            {sellerFulfillment?.timeline && sellerFulfillment.timeline.length > 0 && (
+                              <div className="pt-3 border-t border-[#E6E0D6] space-y-2">
+                                <div className="text-[11px] font-bold text-[#141413] flex items-center gap-1.5">
+                                  <Clock className="w-3.5 h-3.5 text-[#0B4F3F]" />
+                                  <span>
+                                    {t('سجل تتبع شحنة متجرك:', 'Your Store Shipment Timeline:')}
+                                  </span>
+                                </div>
+                                <div className="space-y-1.5 max-h-44 overflow-y-auto pe-1">
+                                  {sellerFulfillment.timeline
+                                    .filter((ev) => ev.completed)
+                                    .map((ev, tIdx) => (
+                                      <div
+                                        key={`${ev.status}-${tIdx}`}
+                                        className="p-2 rounded-lg bg-[#FAF8F5] border border-[#E6E0D6] text-[11px] flex items-start justify-between gap-2"
+                                      >
+                                        <div>
+                                          <div className="font-bold text-[#0B4F3F]">
+                                            {lang === 'ar' ? ev.titleAr : ev.titleEn}
+                                          </div>
+                                          <div className="text-[#57534E] text-[10px]">
+                                            {lang === 'ar' ? ev.descriptionAr : ev.descriptionEn}
+                                          </div>
+                                        </div>
+                                        <span className="font-mono text-[10px] text-[#8C857B] shrink-0">
+                                          {ev.timestamp}
+                                        </span>
+                                      </div>
+                                    ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -857,7 +974,9 @@ export default function SellerOrdersAndReturns({
                 <div className="text-end font-mono">
                   <div className="font-bold text-sm text-[#141413]">#{waybillOrder.orderNumber}</div>
                   <div className="text-[11px] text-[#0B4F3F]">
-                    {waybillOrder.trackingNumber || 'SPL-VIP-WAYBILL'}
+                    {getSellerFulfillment(waybillOrder)?.trackingNumber ||
+                      waybillOrder.trackingNumber ||
+                      'SPL-VIP-WAYBILL'}
                   </div>
                 </div>
               </div>
@@ -883,7 +1002,9 @@ export default function SellerOrdersAndReturns({
                     {t('الناقل ودرجة الخدمة:', 'Carrier & Tier:')}
                   </span>
                   <div className="font-bold text-[#141413] mt-0.5">
-                    {lang === 'ar' ? waybillOrder.carrierAr : waybillOrder.carrierEn}
+                    {lang === 'ar'
+                      ? getSellerFulfillment(waybillOrder)?.carrierAr || waybillOrder.carrierAr
+                      : getSellerFulfillment(waybillOrder)?.carrierEn || waybillOrder.carrierEn}
                   </div>
                   <div className="text-[11px] text-[#0B4F3F] font-bold mt-0.5">
                     {t('شحن مؤمّن ومبرد VIP', 'Insured VIP Express')}
